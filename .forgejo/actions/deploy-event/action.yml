@@ -1,0 +1,33 @@
+name: "deploy event"
+description: >
+  Write the deploy event the ci:deploy job passed as its deploy-event output to
+  .ci/deploy-event.json, where the generated serving-check precondition of a gate verb reads it.
+  ci:deploy writes the file in its own job, and a gate verb runs in another job on another
+  runner, so the file reaches it as a job output. .ci/ is gitignored, and #38 declined a job
+  artifact. An empty output writes nothing, and the precondition then refuses with an error that
+  names the absent event.
+
+inputs:
+  event:
+    description: "The deploy event, from needs.deploy.outputs.deploy-event."
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: "write the deploy event to .ci/deploy-event.json"
+      shell: bash
+      env:
+        DEPLOY_EVENT: ${{ inputs.event }}
+      run: |
+        set -eu
+
+        if [ -z "$DEPLOY_EVENT" ]; then
+          echo "deploy-event: the ci:deploy job passed no deploy event, so .ci/deploy-event.json is not written"
+          exit 0
+        fi
+
+        mkdir -p .ci
+        printf '%s\n' "$DEPLOY_EVENT" >.ci/deploy-event.json
+        echo "deploy-event: the deploy event ci:deploy passed is at .ci/deploy-event.json"
+        cat .ci/deploy-event.json

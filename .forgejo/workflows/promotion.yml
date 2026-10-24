@@ -1,0 +1,61 @@
+name: promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Environment to promote into'
+        required: true
+      release:
+        description: 'Release to promote'
+        required: true
+
+concurrency:
+  group: cd-environment-${{ inputs.target }}
+  cancel-in-progress: false
+
+enable-openid-connect: true
+
+defaults:
+  run:
+    shell: devenv shell bash -- -e {0}
+
+env:
+  CI_ENTRY_POINT: promotion
+  CI_ENVIRONMENT: ${{ inputs.target }}
+  CI_RELEASE: ${{ inputs.release }}
+  CI_BRANCH: ${{ github.ref_name }}
+
+jobs:
+  deploy:
+    name: "ci:deploy"
+    runs-on: nix-host-2cpu-4gb
+    timeout-minutes: 45
+    steps:
+      - name: "check out every tag, carrying no credential"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: "give the checkout cd-pipeline's JWT"
+        uses: ./.forgejo/actions/pipeline-credential
+      - name: "fetch the release record to where ci:deploy reads it"
+        env:
+          GITEA_URL: ${{ github.server_url }}
+          GITEA_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -eu
+          token=$(git config --local --get http.extraHeader |
+            sed -n 's/^Authorization: Bearer //p')
+          test -n "$token"
+          url=$(curl -sfS -H "Authorization: token $token" \
+            "$GITEA_URL/api/v1/repos/$GITEA_REPOSITORY/releases/tags/$CI_RELEASE" |
+            jq -r '.assets[] | select(.name == "release.json") | .browser_download_url')
+          if [ -z "$url" ]; then
+            echo "promotion.yml: the release $CI_RELEASE carries no release.json asset, so the commit set it covered cannot be read and the deploy event would under-report lead time for changes"
+            exit 1
+          fi
+          mkdir -p .ci
+          curl -sfSL -H "Authorization: token $token" "$url" >.ci/release.json
+          echo "promotion.yml: the record of $CI_RELEASE is at .ci/release.json"
+      - run: cd-run ci:deploy

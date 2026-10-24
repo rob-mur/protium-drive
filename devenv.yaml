@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=https://devenv.sh/devenv.schema.json
+inputs:
+  nixpkgs:
+    url: github:cachix/devenv-nixpkgs/rolling
+  # The module reads `inputs.devenv` to reach devenv's own task package, so this
+  # project declares the input as well as the import.
+  devenv:
+    url: github:cachix/devenv?dir=src/modules
+  # `stable` is a tag, and nix's git fetcher reads a bare `ref=stable` as
+  # `refs/heads/stable`, which does not exist. So the ref names the tag in full.
+  cd-pipeline:
+    url: git+https://forgejo.clarob.uk/rob/continuous-delivery?ref=refs/tags/stable
+    flake: false
+imports:
+  - cd-pipeline/nix
+require_version: ">=2.1.2, <3"

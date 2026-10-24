@@ -1,0 +1,99 @@
+name: main
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: cd-environment-dev
+  cancel-in-progress: false
+
+enable-openid-connect: true
+
+defaults:
+  run:
+    shell: devenv shell bash -- -e {0}
+
+env:
+  CI_ENTRY_POINT: main
+  CI_ENVIRONMENT: dev
+  CI_BRANCH: ${{ github.ref_name }}
+
+jobs:
+  deploy:
+    name: "ci:deploy"
+    runs-on: nix-host-2cpu-4gb
+    timeout-minutes: 45
+    outputs:
+      deploy-event: ${{ steps.event.outputs.deploy-event }}
+    steps:
+      # rob/proton-drive-mount is private, so the serving check (tasks/consumer-instance.sh)
+      # fetches the rev with the job token the checkout keeps. The copy from cd-pipeline
+      # checks out with persist-credentials: false.
+      - uses: actions/checkout@v4
+      - run: cd-run ci:deploy
+      - name: Pass the deploy event to the gate verbs as a job output
+        id: event
+        run: printf 'deploy-event=%s\n' "$(jq -c . .ci/deploy-event.json)" >>"$GITHUB_OUTPUT"
+
+  acceptance:
+    name: "ci:acceptance"
+    runs-on: nix-host-2cpu-4gb
+    needs: deploy
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write the registry credential cd-acceptance-diff reads the record back with
+        uses: ./.forgejo/actions/registry-credential
+        with:
+          key-base64: ${{ secrets.REGISTRY_KEY_BASE64 }}
+      - name: Write the deploy event ci:deploy passed
+        uses: ./.forgejo/actions/deploy-event
+        with:
+          event: ${{ needs.deploy.outputs.deploy-event }}
+      - run: cd-run ci:acceptance
+      - uses: actions/upload-artifact@v3
+        with:
+          name: acceptance-record
+          path: .ci/acceptance-record.json
+
+  non-functional-requirements:
+    name: "ci:non-functional-requirements"
+    runs-on: nix-host-2cpu-4gb
+    needs: [deploy, acceptance]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write the deploy event ci:deploy passed
+        uses: ./.forgejo/actions/deploy-event
+        with:
+          event: ${{ needs.deploy.outputs.deploy-event }}
+      - run: cd-run ci:non-functional-requirements
+
+  end-of-run:
+    name: "cd-releasable, cd-writeback, cd-ratchet-report"
+    runs-on: nix-host-2cpu-4gb
+    needs: [acceptance, non-functional-requirements]
+    timeout-minutes: 45
+    steps:
+      - name: "check out carrying no credential"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v3
+        with:
+          name: acceptance-record
+          path: .ci
+      - name: "give the checkout cd-pipeline's JWT"
+        uses: ./.forgejo/actions/pipeline-credential
+      - run: cd-releasable
+      - run: cd-writeback
+      - run: cd-ratchet-report
+        continue-on-error: true
+      - uses: actions/upload-artifact@v3
+        if: always()
+        continue-on-error: true
+        with:
+          name: ratchet
+          path: .ci/advisory/

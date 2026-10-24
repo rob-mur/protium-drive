@@ -1,0 +1,27 @@
+name: "pipeline credential"
+description: >
+  Sign the Authorized Integration owned by cd-pipeline and write its JWT into the
+  checkout's http.extraHeader, so a push made from this checkout is made as
+  cd-pipeline rather than as the forgejo-actions pseudo-user. The caller checks out
+  with persist-credentials: false and carries enable-openid-connect: true; every
+  writer to a protected ref in this repository calls this action and no workflow
+  holds a copy of the exchange. The integration is the Generic JWT one every rob/*
+  adopter shares (#606), so an adopter copies this action unchanged;
+  docs/decisions/release-tag-protection.md holds its claim rules.
+
+runs:
+  using: composite
+  steps:
+    - name: "exchange the run's OIDC token for the integration's JWT"
+      shell: bash
+      env:
+        CD_PIPELINE_INTEGRATION_AUDIENCE: u:3:a41d8aa2-0f65-47e8-9b6e-f37c9c1c6e55
+      run: |
+        set -eu
+        minted=$(curl --fail -sS \
+          -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$CD_PIPELINE_INTEGRATION_AUDIENCE")
+        jwt=$(printf '%s' "$minted" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
+        test -n "$jwt"
+        echo "::add-mask::$jwt"
+        git config --local --replace-all http.extraHeader "Authorization: Bearer $jwt"

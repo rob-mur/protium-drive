@@ -1,0 +1,82 @@
+name: release
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: cd-release
+  cancel-in-progress: false
+
+enable-openid-connect: true
+
+defaults:
+  run:
+    shell: devenv shell bash -- -e {0}
+
+jobs:
+  release:
+    name: "release"
+    runs-on: nix-host-2cpu-4gb
+    timeout-minutes: 45
+    steps:
+      - name: "check out the pointer, carrying no credential"
+        uses: actions/checkout@v4
+        with:
+          ref: releasable
+          fetch-depth: 0
+          persist-credentials: false
+      - name: "give the checkout cd-pipeline's JWT"
+        uses: ./.forgejo/actions/pipeline-credential
+      - name: "refuse any revision that is not the tip of releasable"
+        run: cd-release
+      - name: "install the release plugin from cd-pipeline/release/package-lock.json"
+        run: npm ci --prefix cd-pipeline/release
+      - name: "cut the version and post the release object with its record"
+        env:
+          GITEA_URL: ${{ github.server_url }}
+          CD_RELEASE_RECORD: .ci/release.json
+          CD_RELEASE_BRANCH: .ci/release-branch
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: core.hooksPath
+          GIT_CONFIG_VALUE_0: /dev/null
+        run: |
+          set -eu
+          test -z "${CI_ENTRY_POINT:-}" || {
+            echo "release.yml: CI_ENTRY_POINT is set, so cd-release above returned green without asserting the tip of releasable, and cutting here would publish a revision no gate verb judged"
+            exit 1
+          }
+          mkdir -p .ci
+          rm -f "$CD_RELEASE_BRANCH"
+          GITEA_TOKEN=$(git config --local --get http.extraHeader |
+            sed -n 's/^Authorization: Bearer //p')
+          test -n "$GITEA_TOKEN"
+          export GITEA_TOKEN
+          GITHUB_REF=refs/heads/releasable semantic-release --no-ci --branches releasable \
+            --extends ./cd-pipeline/release/release.config.mjs
+          branch=$(cat "$CD_RELEASE_BRANCH" 2>/dev/null || true)
+          if [ "$branch" != releasable ]; then
+            echo "release.yml: semantic-release stopped before verifyConditions, so it did not take this run as the tip of 'releasable' and published nothing; its log above says whether it read another branch or found releasable behind the remote"
+            exit 1
+          fi
+      - name: "refuse a release object that lost its record"
+        env:
+          GITEA_URL: ${{ github.server_url }}
+          GITEA_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -eu
+          if [ ! -f .ci/release.json ]; then
+            echo "release.yml: this batch cut no release, so there is no record to assert"
+            exit 0
+          fi
+          tag=$(jq -r .tag .ci/release.json)
+          token=$(git config --local --get http.extraHeader |
+            sed -n 's/^Authorization: Bearer //p')
+          test -n "$token"
+          attached=$(curl -sfS -H "Authorization: token $token" \
+            "$GITEA_URL/api/v1/repos/$GITEA_REPOSITORY/releases/tags/$tag" |
+            jq '[.assets[] | select(.name == "release.json")] | length')
+          if [ "$attached" != 1 ]; then
+            echo "release.yml: the release $tag carries $attached asset named release.json, so a promotion of it could not read the commit set the cut covered"
+            exit 1
+          fi
+          echo "release.yml: the release $tag carries its record as release.json"

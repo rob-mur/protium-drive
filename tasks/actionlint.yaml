@@ -1,0 +1,8 @@
+self-hosted-runner:
+  labels:
+    - nix-host-2cpu-4gb
+paths:
+  .forgejo/workflows/**/*.yml:
+    ignore:
+      - 'the runner of "actions/.+" action is too old to run on GitHub Actions'
+      - 'unexpected key "enable-openid-connect" for "workflow" section'

@@ -1,0 +1,133 @@
+name: merge-request
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: cd-environment-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: devenv shell bash -- -e {0}
+
+env:
+  CI_ENTRY_POINT: merge-request
+  CI_ENVIRONMENT: pr-${{ github.event.pull_request.number }}
+  CI_BRANCH: ${{ github.head_ref }}
+  COMMIT_BUDGET: "300"
+  ACCEPTANCE_BUDGET: "600"
+  MAIN_BUDGET: "3600"
+
+jobs:
+  commit:
+    name: "ci:commit"
+    runs-on: nix-host-2cpu-4gb
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create refs/cd-base and refs/cd-head
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -eu
+          git fetch --no-tags --force origin \
+            "refs/heads/$BASE_REF:refs/cd-base" \
+            "refs/pull/$PR_NUMBER/head:refs/cd-head"
+          git rev-parse --verify refs/cd-base
+          git rev-parse --verify refs/cd-head
+      - run: cd-run ci:commit
+
+  deploy:
+    name: "ci:deploy"
+    runs-on: nix-host-2cpu-4gb
+    timeout-minutes: 45
+    outputs:
+      deploy-event: ${{ steps.event.outputs.deploy-event }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: cd-run ci:deploy
+      - name: Pass the deploy event to the gate verbs as a job output
+        id: event
+        run: printf 'deploy-event=%s\n' "$(jq -c . .ci/deploy-event.json)" >>"$GITHUB_OUTPUT"
+
+  acceptance:
+    name: "ci:acceptance"
+    runs-on: nix-host-2cpu-4gb
+    needs: [deploy, commit]
+    if: always()
+    timeout-minutes: 45
+    steps:
+      - name: Refuse when an earlier verb did not pass
+        if: needs.deploy.result != 'success' || needs.commit.result != 'success'
+        shell: bash
+        env:
+          COMMIT_RESULT: ${{ needs.commit.result }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+        run: |
+          set -eu
+          if [ "$COMMIT_RESULT" != success ]; then
+            echo "ci:acceptance: refused: ci:commit is '$COMMIT_RESULT' and not 'success', so an earlier verb in this merge request did not pass"
+          fi
+          if [ "$DEPLOY_RESULT" != success ]; then
+            echo "ci:acceptance: refused: ci:deploy is '$DEPLOY_RESULT' and not 'success', so an earlier verb in this merge request did not pass"
+          fi
+          exit 1
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Write refs/cd-merge
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -eu
+          git fetch --no-tags --force origin \
+            "refs/heads/$BASE_REF:refs/cd-base" \
+            "refs/pull/$PR_NUMBER/head:refs/cd-head"
+          git update-ref refs/cd-merge "$(git merge-tree --write-tree refs/cd-base refs/cd-head)"
+          git rev-parse --verify refs/cd-merge
+      - name: Write the registry credential cd-acceptance-diff publishes the record with
+        uses: ./.forgejo/actions/registry-credential
+        with:
+          key-base64: ${{ secrets.REGISTRY_KEY_BASE64 }}
+      - name: Write the deploy event ci:deploy passed
+        uses: ./.forgejo/actions/deploy-event
+        with:
+          event: ${{ needs.deploy.outputs.deploy-event }}
+      - run: cd-run ci:acceptance
+
+  time-budget-stop:
+    name: "time-budget-stop"
+    runs-on: nix-host-2cpu-4gb
+    needs: acceptance
+    if: always()
+    timeout-minutes: 10
+    env:
+      API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
+      RUN_NUMBER: ${{ github.run_number }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+      GATE_REVIEWER: cd-pipeline
+      FJ_TOKEN: ${{ secrets.CD_PIPELINE_TOKEN }}
+    steps:
+      - name: Refuse when an earlier verb did not pass
+        if: needs.acceptance.result != 'success'
+        shell: bash
+        env:
+          ACCEPTANCE_RESULT: ${{ needs.acceptance.result }}
+        run: |
+          set -eu
+          echo "time-budget-stop: refused: ci:acceptance is '$ACCEPTANCE_RESULT' and not 'success', so this run has no measured spans to judge"
+          exit 1
+      - uses: actions/checkout@v4
+      - name: Post one acknowledgement when a stage timing breaches its budget
+        if: needs.acceptance.result == 'success'
+        run: exec tasks/time-budget-stop.sh

@@ -1,0 +1,11 @@
+[
+  { "glob": "tasks/**", "category": "pipeline" },
+  { "glob": "cd-builtins/release-record.mjs", "category": "pipeline" },
+  { "glob": "src/**/*.test.ts", "category": "non-production" },
+  { "glob": "README.md", "category": "non-production" },
+  { "glob": "LICENSE", "category": "non-production" },
+  { "glob": ".gitignore", "category": "non-production" },
+  { "glob": "vendor/README.md", "category": "non-production" },
+  { "glob": "spec/support/send/**", "category": "frozen" },
+  { "glob": "fake-drive/**", "category": "frozen" }
+]

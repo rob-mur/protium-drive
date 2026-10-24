@@ -1,0 +1,39 @@
+name: "registry credential"
+description: >
+  Write the ambient ~/.docker/config.json from the base64 service-account key the forge secret
+  REGISTRY_KEY_BASE64 holds, so every OCI tool on the runner reads a credential for the Artifact
+  Registry host without naming one and without a credential helper. Every job that pushes to the
+  registry or reads it back calls this action, so the one credential has one home.
+  docs/decisions/the-registry-credential.md holds why the secret carries the base64 rather than the
+  raw JSON, and what ends the stored key.
+
+inputs:
+  key-base64:
+    description: "The base64 of the service-account JSON key, from secrets.REGISTRY_KEY_BASE64."
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: "write the ambient docker config"
+      shell: bash
+      env:
+        REGISTRY_KEY_BASE64: ${{ inputs.key-base64 }}
+        CD_REGISTRY_HOST: europe-west1-docker.pkg.dev
+      run: |
+        set -eu
+
+        if [ -z "$REGISTRY_KEY_BASE64" ]; then
+          echo "registry-credential: REFUSED. The forge secret REGISTRY_KEY_BASE64 is empty or unset, so no credential can be written for $CD_REGISTRY_HOST. infra/README.md says how to put the value there."
+          exit 1
+        fi
+
+        auth=$(printf '_json_key_base64:%s' "$REGISTRY_KEY_BASE64" | base64 -w0)
+        echo "::add-mask::$auth"
+
+        mkdir -p "$HOME/.docker"
+        umask 077
+        printf '{"auths":{"%s":{"auth":"%s"}}}\n' "$CD_REGISTRY_HOST" "$auth" \
+          > "$HOME/.docker/config.json"
+
+        echo "the docker config names $CD_REGISTRY_HOST, and no credential helper"

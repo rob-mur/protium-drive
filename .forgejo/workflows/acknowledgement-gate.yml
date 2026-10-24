@@ -1,0 +1,218 @@
+name: acknowledgement-gate
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: acknowledgement-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: devenv --profile acknowledgement-gate shell bash -- -e {0}
+
+jobs:
+  acknowledgement-gate:
+    name: "acknowledgement-gate"
+    runs-on: nix-host-2cpu-4gb
+    timeout-minutes: 45
+    env:
+      GATE_REVIEWER: cd-pipeline
+      API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+      FJ_TOKEN: ${{ secrets.CD_PIPELINE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Has the acknowledgement gate already been posted?
+        run: |
+          exec tasks/acknowledgement-posted.sh
+
+      - name: Skip a merge request the gate identity authored
+        if: ${{ env.GATE_ALREADY_POSTED == 'no' && env.GATE_REVIEWER == env.PR_AUTHOR }}
+        shell: bash
+        run: |
+          echo "acknowledgement-gate: '$PR_AUTHOR' opened this merge request and also posts the stop. Forgejo refuses a self-authored REQUEST_CHANGES with 422, so there is nothing to post."
+          echo "GATE_ALREADY_POSTED=skip-self" >> "$GITHUB_ENV"
+
+      - name: Refuse a merge request from a fork
+        if: ${{ env.GATE_ALREADY_POSTED == 'no' }}
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+        shell: bash
+        run: |
+          set -eu
+          if [ -z "$HEAD_REPO" ] || [ -z "$BASE_REPO" ]; then
+            echo "acknowledgement-gate: refused: the event names no head or base repository (head='$HEAD_REPO', base='$BASE_REPO'), so the gate cannot tell a fork from a branch"
+            exit 1
+          fi
+          if [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "acknowledgement-gate: refused: the head is a fork. '$HEAD_REPO' is not '$BASE_REPO', and this gate reads only a branch of the base repository."
+            exit 1
+          fi
+          echo "acknowledgement-gate: the head is a branch of '$BASE_REPO', not a fork"
+
+      - name: Create refs/cd-base and refs/cd-head
+        if: ${{ env.GATE_ALREADY_POSTED == 'no' }}
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -eu
+          git fetch --no-tags --force origin \
+            "refs/heads/$BASE_REF:refs/cd-base" \
+            "refs/pull/$PR_NUMBER/head:refs/cd-head"
+          git rev-parse --verify refs/cd-base
+          git rev-parse --verify refs/cd-head
+
+      - name: Does this merge request warrant a closer read?
+        if: ${{ env.GATE_ALREADY_POSTED == 'no' }}
+        run: |
+          set -euo pipefail
+          set +e
+          cd-freeze-gate > /tmp/gate-report.txt
+          report_status=$?
+          set -e
+          cat /tmp/gate-report.txt
+          if [ "$report_status" -ge 2 ]; then
+            echo "acknowledgement-gate: refused: cd-freeze-gate exited $report_status, so this run cannot tell which lane the merge request touches"
+            exit 1
+          fi
+
+          : > /tmp/gate-triggers.md
+          selected=no
+
+          if grep -q "^pipeline " /tmp/gate-report.txt; then
+            selected=yes
+            {
+              echo "- **It changes pipeline paths.** Isolating such a change into its own merge"
+              echo "  request is what lets a reviewer catch a task quietly seeding data, misreporting a"
+              echo "  version, or standing up a double the production path does not have."
+              echo "  \`cd-freeze-gate\` classified these:"
+              echo
+              grep "^pipeline " /tmp/gate-report.txt | sed "s/^/      /"
+              echo
+            } >> /tmp/gate-triggers.md
+          fi
+
+          cat > /tmp/frozen-diff.jq <<'JQ'
+          (($base[0].scenarios // []) | map(.id)) as $b
+          | (($head[0].scenarios // []) | map(.id)) as $h
+          | ($b - $h) as $removed
+          | (if ($removed | length) > 0 then
+               ["- **A frozen scenario on the base is absent from this head.** A removal can be",
+                "  correct — the business drops a feature and its scenarios go with it — so this is",
+                "  a reading, never a refusal. Absent from the head:",
+                ""]
+               + ($removed | map("      " + .))
+               + [""]
+             else [] end)
+          | .[]
+          JQ
+
+          lock_at() {
+            if git cat-file -e "$1:spec/frozen.lock.json" 2>/dev/null; then
+              git show "$1:spec/frozen.lock.json" > "$2"
+            else
+              return 1
+            fi
+          }
+
+          if ! lock_at refs/cd-base /tmp/base-lock.json; then
+            echo "acknowledgement-gate: the base carries no spec/frozen.lock.json, so there is no baseline to read against"
+          else
+            if ! lock_at refs/cd-head /tmp/head-lock.json; then
+              echo '{"version":1,"scenarios":[]}' > /tmp/head-lock.json
+              echo "acknowledgement-gate: the head carries no spec/frozen.lock.json, so every scenario on the base reads as removed"
+            fi
+            echo "acknowledgement-gate: frozen scenarios: base=$(jq '.scenarios | length' /tmp/base-lock.json) head=$(jq '.scenarios | length' /tmp/head-lock.json)"
+            if ! jq -r -n \
+              --slurpfile base /tmp/base-lock.json \
+              --slurpfile head /tmp/head-lock.json \
+              -f /tmp/frozen-diff.jq > /tmp/frozen-findings.md; then
+              echo "acknowledgement-gate: refused: spec/frozen.lock.json could not be read at both refs, so this run cannot tell what changed in it"
+              exit 1
+            fi
+            if [ -s /tmp/frozen-findings.md ]; then
+              selected=yes
+              cat /tmp/frozen-findings.md >> /tmp/gate-triggers.md
+            else
+              echo "acknowledgement-gate: the frozen lock reads clean: no scenario removed"
+            fi
+          fi
+
+          echo "GATE_SELECTED=$selected"
+          echo "GATE_SELECTED=$selected" >> "$GITHUB_ENV"
+
+      - name: Post the acknowledgement gate
+        if: ${{ env.GATE_ALREADY_POSTED == 'no' && env.GATE_SELECTED == 'yes' }}
+        run: |
+          set -eu
+          echo "::add-mask::$FJ_TOKEN"
+          cat > /tmp/gate-body.md <<'BODY'
+          ## Acknowledgement gate
+
+          This review judges nothing. No check failed, and nothing here says the change is
+          wrong. It is a stop that a human clears by reading, and it exists so that clearing
+          it leaves a visible, dated event on this merge request.
+
+          **Why this merge request, and not every one.** The gate fires on a measured fact
+          about the diff, never on an opinion about it. What it measured here:
+
+          BODY
+          cat /tmp/gate-triggers.md >> /tmp/gate-body.md
+          cat >> /tmp/gate-body.md <<'BODY'
+          **Before you dismiss it, read:**
+
+          1. **The issue this merge request closes**, and then the diff — does the diff do what
+             the issue asked, in full, and nothing else?
+          2. **Every file in the diff**, not the summary. A pipeline-path change that makes CI
+             pass unconditionally is what this reading is for.
+          3. **The CI run.** `cd-freeze-gate` and `ci:acceptance` are what judge the commit.
+             This review does not, and a green run is not a substitute for the two readings
+             above.
+
+          Dismiss it in the web UI when you have read those. The dismissal is recorded with
+          your name and the time, which is the whole of what this gate buys.
+
+          **It will not come back.** Once dismissed, further pushes to this branch leave the
+          dismissal standing — a stop that returned after every push could never be cleared.
+
+          **Its limit.** An acknowledgement gate stops nobody who holds the rights to clear it.
+          The repository owner holds them and always will. What this buys is that clearing the
+          stop is visible and dated. It was never that clearing it is hard.
+          BODY
+          awk 'BEGIN { ORS = "" } { gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print $0 "\\n" }' \
+            /tmp/gate-body.md > /tmp/gate-body.json
+          printf '{"event":"REQUEST_CHANGES","body":"%s"}' "$(cat /tmp/gate-body.json)" > /tmp/gate-review.json
+          code=$(curl -sS -o /tmp/gate-response.json -w '%{http_code}' \
+            -X POST \
+            -H "Authorization: token $FJ_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data @/tmp/gate-review.json \
+            "$API/pulls/$PR_NUMBER/reviews")
+          if [ "$code" != "200" ]; then
+            echo "acknowledgement-gate: refused: posting the review as '$GATE_REVIEWER' returned HTTP $code"
+            head -c 400 /tmp/gate-response.json
+            exit 1
+          fi
+          echo "acknowledgement-gate: posted as '$GATE_REVIEWER' on merge request #$PR_NUMBER"
+
+      - name: Report what this run did
+        shell: bash
+        run: |
+          case "${GATE_ALREADY_POSTED:-}" in
+            yes)  echo "acknowledgement-gate: '$GATE_REVIEWER' has already reviewed merge request #$PR_NUMBER. Posting nothing: one stop per merge request, and a dismissed stop stays dismissed." ;;
+            skip-self) echo "acknowledgement-gate: nothing posted, the gate identity authored this merge request." ;;
+            *)
+              if [ "${GATE_SELECTED:-}" = "yes" ]; then
+                echo "acknowledgement-gate: the stop is on merge request #$PR_NUMBER, waiting for a human to read it and dismiss it."
+              else
+                echo "acknowledgement-gate: nothing posted. Merge request #$PR_NUMBER changes no pipeline path and removes no frozen scenario, so it is not one this gate raises for a closer read."
+              fi
+              ;;
+          esac
