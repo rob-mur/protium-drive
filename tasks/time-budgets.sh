@@ -11,12 +11,13 @@ PAGE_LIMIT=${PAGE_LIMIT:-50}
 MAX_PAGES=${MAX_PAGES:-6}
 
 # rob/proton-drive-mount is private, so an anonymous read answers 404. The reading carries the
-# identity the stop posts with (the CD_PIPELINE_TOKEN secret, as FJ_TOKEN) when the job has it.
-# rob/continuous-delivery's copy at the pinned `stable` reads anonymously: that repository is
-# public (rob/continuous-delivery#659).
+# job's own token (READING_TOKEN) when the job has it: it reads this repository and nothing else,
+# and it needs no account the stop posts as to be a collaborator. rob/continuous-delivery's copy
+# at the pinned `stable` reads anonymously: that repository is public
+# (rob/continuous-delivery#659).
 auth=()
-if [ -n "${FJ_TOKEN:-}" ]; then
-  auth=(-H "Authorization: token $FJ_TOKEN")
+if [ -n "${READING_TOKEN:-}" ]; then
+  auth=(-H "Authorization: token $READING_TOKEN")
 fi
 
 page_body=$(mktemp)

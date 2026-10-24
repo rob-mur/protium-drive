@@ -117,6 +117,8 @@ jobs:
       PR_AUTHOR: ${{ github.event.pull_request.user.login }}
       GATE_REVIEWER: cd-pipeline
       FJ_TOKEN: ${{ secrets.CD_PIPELINE_TOKEN }}
+      # This repository is private: tasks/time-budgets.sh reads its runs with the job's own token.
+      READING_TOKEN: ${{ github.token }}
     steps:
       - name: Refuse when an earlier verb did not pass
         if: needs.acceptance.result != 'success'
