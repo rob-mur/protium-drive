@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "binary-reports-its-revision",
+      "path": "spec/features/identity.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the answer names the revision the binary was built from$"
+      ]
+    }
+  ]
+}
