@@ -10,6 +10,15 @@ set -euo pipefail
 PAGE_LIMIT=${PAGE_LIMIT:-50}
 MAX_PAGES=${MAX_PAGES:-6}
 
+# rob/proton-drive-mount is private, so an anonymous read answers 404. The reading carries the
+# identity the stop posts with (the CD_PIPELINE_TOKEN secret, as FJ_TOKEN) when the job has it.
+# rob/continuous-delivery's copy at the pinned `stable` reads anonymously: that repository is
+# public (rob/continuous-delivery#659).
+auth=()
+if [ -n "${FJ_TOKEN:-}" ]; then
+  auth=(-H "Authorization: token $FJ_TOKEN")
+fi
+
 page_body=$(mktemp)
 merged=$(mktemp)
 runs=$(mktemp)
@@ -24,7 +33,7 @@ read_window() {
   while [ "$page" -le "$MAX_PAGES" ]; do
     url="$API/actions/$endpoint?limit=$PAGE_LIMIT&page=$page"
 
-    if ! status=$(curl -sS --connect-timeout 10 --max-time 60 -o "$page_body" -w '%{http_code}' "$url"); then
+    if ! status=$(curl -sS --connect-timeout 10 --max-time 60 -o "$page_body" -w '%{http_code}' "${auth[@]}" "$url"); then
       echo "time-budgets: refused: reading $url failed before any HTTP status arrived"
       exit 1
     fi
