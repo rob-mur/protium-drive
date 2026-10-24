@@ -13,6 +13,8 @@
     pkgs.git
     pkgs.jq
     pkgs.rclone
+    # cd-acceptance-diff reads and publishes the acceptance record with skopeo.
+    pkgs.skopeo
   ];
 
   # Copied from rob/continuous-delivery's devenv.nix at the pinned `stable`, as the adoption
@@ -79,14 +81,14 @@
         echo "ci:deploy:teardown: a source member has no environment to tear down"
       '';
 
+      # Both stubs pass and judge nothing, as cd-pipeline's own stub for an unbuilt verb does. Each
+      # names the issue that replaces it.
       acceptance.tasks.frozen-suite.exec = ''
-        echo "ci:acceptance:frozen-suite: cd-pipeline ships no suite runner for step definitions that are not Rust, so nothing here can apply spec/frozen.lock.json and the ratchet to the cucumber-js suite in spec/. Waiting on rob/continuous-delivery#653."
-        exit 1
+        echo "ci:acceptance:frozen-suite: not implemented. cd-pipeline ships no suite runner for step definitions that are not Rust, so nothing here applies spec/frozen.lock.json and the ratchet to the cucumber-js suite in spec/, and this run judges no scenario. rob/continuous-delivery#653 replaces it."
       '';
 
       non-functional-requirements.tasks.spec-reach.exec = ''
-        echo "ci:non-functional-requirements:spec-reach: cd-pipeline writes no production diff and gates no spec reach yet, so nothing here measures which production lines the frozen suite executes. Waiting on rob/continuous-delivery#652 (epic #112)."
-        exit 1
+        echo "ci:non-functional-requirements:spec-reach: not implemented. cd-pipeline writes no production diff and gates no spec reach yet, so nothing here measures which production lines the frozen suite executes. rob/continuous-delivery#652 (epic #112) replaces it."
       '';
     };
   };
