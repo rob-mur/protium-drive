@@ -1,0 +1,20 @@
+diff --git a/dist/internal/download/fileDownloader.js b/dist/internal/download/fileDownloader.js
+index b14fb6b79f0da15252dc00f7f09abbe82d9e9b1f..da423ec0eb841f314e6f159da3307d58cfa18bdc 100644
+--- a/dist/internal/download/fileDownloader.js
++++ b/dist/internal/download/fileDownloader.js
+@@ -146,7 +146,14 @@ export class FileDownloader {
+     async internalDownloadToStream(stream, onProgress) {
+         let ignoreIntegrityErrors = arguments.length > 2 && arguments[2] !== void 0 ? arguments[2] : false;
+         const writer = stream.getWriter();
+-        const cryptoKeys = await this.cryptoService.getRevisionKeys(this.nodeKey, this.revision);
++        let cryptoKeys;
++        try {
++            cryptoKeys = await this.cryptoService.getRevisionKeys(this.nodeKey, this.revision);
++        } catch (error) {
++            // proton-drive-mount patch: free the download slot when the keys cannot load.
++            this.onFinish?.();
++            throw error;
++        }
+         // File progress is tracked for telemetry - to track at what
+         // point the download failed.
+         let fileProgress = 0;
