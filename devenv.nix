@@ -61,6 +61,9 @@
         exec bun x tsc --noEmit -p .
       '';
 
+      # After typecheck: both run bun install in the root, and two installs at once into one
+      # node_modules/ fail ("failed copying files from cache to destination").
+      commit.tasks.unit-tests.after = [ "ci:commit:typecheck" ];
       commit.tasks.unit-tests.exec = ''
         exec tasks/unit-tests.sh
       '';
