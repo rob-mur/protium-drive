@@ -1,0 +1,6 @@
+{
+    // Type-checks the Receive arm on its own: `bun x tsc --noEmit -p fake-drive`. The root
+    // tsconfig.json covers src/ and vendor/ only, and src/ reaches this code when it imports it.
+    "extends": "../tsconfig.json",
+    "include": ["**/*.ts"]
+}
