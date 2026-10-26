@@ -3,6 +3,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { ConnectionError } from '@protontech/drive-sdk';
+
+import type { SessionCredentials, SessionInfo } from '../vendor/proton-drive-sdk-account/sessionCredentials.ts';
 import { CONTROL_LINE, type ReceiveArm, startReceiveArm } from './receive-arm.ts';
 
 let base: string;
@@ -66,6 +69,59 @@ describe('the Receive arm', () => {
         );
     });
 
+    test('moves its clock, raises its faults and runs its account through the control channel', async () => {
+        const { arm } = await start();
+        const post = async (path: string, body?: unknown) => {
+            const response = await fetch(new URL(path, arm.controlUrl), { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
+            expect(response.status).toBe(200);
+            return response.json();
+        };
+
+        const start0 = arm.clock.now();
+        const fired: number[] = [];
+        arm.clock.setTimeout(() => fired.push(arm.clock.now()), 30_000);
+        expect(await post('/clock/advance', { seconds: 30 })).toEqual({ now: start0 + 30_000, fired: 1 });
+        expect(fired).toEqual([start0 + 30_000]);
+
+        await post('/faults', { kind: 'unreachable', operation: 'getMyFilesRootFolder', path: '' });
+        await expect(arm.client.getMyFilesRootFolder()).rejects.toBeInstanceOf(ConnectionError);
+        await arm.client.getMyFilesRootFolder();
+
+        const credentials = new SavedCredentials();
+        const { auth } = await arm.account.initAccount({ authClientId: 'external-drive', credentials });
+        const urls: string[] = [];
+        const signedIn = auth.authViaWeb((url) => void urls.push(url));
+        while (urls.length === 0) await Bun.sleep(1);
+        expect(await post('/account/approve')).toEqual({ approved: 1 });
+        await signedIn;
+        await post('/account/expire');
+        await arm.client.getMyFilesRootFolder();
+        expect(credentials.saved?.refreshToken).toBe('refresh-2');
+    });
+
+    test('a session saved by one start is accepted by the next start on the same DIR', async () => {
+        const first = (await start()).arm;
+        const credentials = new SavedCredentials();
+        const { auth } = await first.account.initAccount({ authClientId: 'external-drive', credentials });
+        let approval: Promise<Response> | undefined;
+        await auth.authViaWeb(() => {
+            approval = fetch(new URL('/account/approve', first.controlUrl), { method: 'POST' });
+        });
+        expect((await approval!).status).toBe(200);
+        await first.stop();
+
+        const second = (await start()).arm;
+        const again = new SavedCredentials(credentials.saved);
+        const { auth: auth2 } = await second.account.initAccount({ authClientId: 'external-drive', credentials: again });
+        expect(auth2.isLoggedIn()).toBe(true);
+        await second.client.getMyFilesRootFolder();
+        await fetch(new URL('/account/expire', second.controlUrl), { method: 'POST' });
+        await second.client.getMyFilesRootFolder();
+        const report = await (await fetch(new URL('/account', second.controlUrl))).json();
+        expect(report).toMatchObject({ signIns: { approved: 1 }, refreshes: [{ used: 'refresh-1', outcome: 'rotated' }] });
+        expect(again.saved?.refreshToken).toBe('refresh-2');
+    });
+
     for (const signal of ['SIGTERM', 'SIGINT'] as const) {
         test(`runs on its own from the command line until ${signal} stops it`, async () => {
             const child = Bun.spawn(['bun', join(import.meta.dir, 'receive-arm.ts'), dir], { stderr: 'pipe', stdout: 'ignore' });
@@ -97,3 +153,48 @@ describe('the Receive arm', () => {
         }
     });
 });
+
+/** The product's session code in small: `saved` is what its session file would hold. */
+class SavedCredentials implements SessionCredentials {
+    private keyPassword?: string;
+    private info?: SessionInfo;
+
+    constructor(public saved?: SessionInfo) {}
+
+    get uid() {
+        return this.info?.uid;
+    }
+    get accessToken() {
+        return this.info?.accessToken;
+    }
+    get refreshToken() {
+        return this.info?.refreshToken;
+    }
+    on() {}
+    isLoggedIn() {
+        return !!this.keyPassword && !!this.info;
+    }
+    isTelemetryEnabled() {
+        return false;
+    }
+    getUserKeyPassword() {
+        return this.keyPassword;
+    }
+    async load() {
+        if (!this.saved) return;
+        this.info = this.saved;
+        this.keyPassword = 'loaded';
+    }
+    async setUserKeyPassword(value: string) {
+        this.keyPassword = value;
+    }
+    async setSessionInfo(info: SessionInfo) {
+        this.info = info;
+        this.saved = info;
+    }
+    async setTelemetryEnabled() {}
+    async signOut() {
+        this.info = undefined;
+        this.keyPassword = undefined;
+    }
+}

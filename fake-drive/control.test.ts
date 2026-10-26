@@ -3,10 +3,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { type DriveEvent, DriveEventType } from '@protontech/drive-sdk';
+import { type DriveEvent, DriveEventType, RateLimitedError } from '@protontech/drive-sdk';
 
+import type { SessionCredentials, SessionInfo } from '../vendor/proton-drive-sdk-account/sessionCredentials.ts';
+import { FakeAccount } from './account.ts';
+import { FakeClock } from './clock.ts';
 import { type ControlChannel, startControlChannel } from './control.ts';
 import { FakeDrive, FakeDriveClient, SCOPE_ID } from './drive.ts';
+import { Faults } from './faults.ts';
 
 let dir: string;
 let drive: FakeDrive;
@@ -153,3 +157,125 @@ describe('the control channel', () => {
         await expect(get('/trash')).rejects.toThrow();
     });
 });
+
+describe('the control channel of the clock, the faults and the account', () => {
+    let clock: FakeClock;
+    let faults: Faults;
+    let account: FakeAccount;
+    let full: ControlChannel;
+
+    beforeEach(() => {
+        clock = new FakeClock(1_000_000);
+        faults = new Faults();
+        account = FakeAccount.open(dir);
+        client = new FakeDriveClient(drive, { clock, faults, account });
+        full = startControlChannel(drive, client, { clock, faults, account });
+    });
+
+    afterEach(async () => {
+        await full.stop();
+    });
+
+    const at = (path: string) => new URL(path, full.url);
+    const send = (path: string, body?: unknown) => fetch(at(path), { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
+
+    test('moves the clock by a number of seconds, and fires each timer that falls due', async () => {
+        const fired: number[] = [];
+        clock.setTimeout(() => fired.push(clock.now()), 30_000);
+        clock.setTimeout(() => fired.push(clock.now()), 31_000);
+
+        expect(await json(fetch(at('/clock')))).toEqual({ now: 1_000_000 });
+        expect(await json(send('/clock/advance', { seconds: 30 }))).toEqual({ now: 1_030_000, fired: 1 });
+        expect(fired).toEqual([1_030_000]);
+        expect(await json(send('/clock/advance', { seconds: 0.5 }))).toEqual({ now: 1_030_500, fired: 0 });
+        for (const body of [{}, { seconds: -1 }, { seconds: '30' }, { seconds: null }, { seconds: 1e306 }]) {
+            expect((await send('/clock/advance', body)).status).toBe(400);
+        }
+        expect(clock.now()).toBe(1_030_500);
+    });
+
+    test('sets a fault, lists it until a call consumes it, and refuses a fault that cannot occur', async () => {
+        await json(post('/add', { path: 'Photos/beach.jpg', type: 'file', content: 'sand and sea' }));
+        const fault = { kind: 'rate-limited', operation: 'iterateFolderChildrenNodeUids', path: 'Photos' };
+        expect(await json(send('/faults', fault))).toEqual({ pending: [fault] });
+        expect(await json(fetch(at('/faults')))).toEqual([fault]);
+
+        const listing = client.iterateFolderChildrenNodeUids(drive.nodeAt('Photos').uid);
+        await expect(listing.next()).rejects.toBeInstanceOf(RateLimitedError);
+        expect(await json(fetch(at('/faults')))).toEqual([]);
+
+        for (const bad of [{ ...fault, kind: 'meteor' }, { ...fault, operation: 'nope' }, { kind: 'integrity', operation: 'getNode', path: 'a' }]) {
+            const response = await send('/faults', bad);
+            expect(response.status).toBe(400);
+            expect(await response.json()).toEqual({ error: expect.any(String) });
+        }
+        expect((await send('/faults', 'not json')).status).toBe(400);
+    });
+
+    test('approves a waiting sign-in, and answers 409 when none waits', async () => {
+        expect((await send('/account/approve')).status).toBe(409);
+        const { auth } = await account.initAccount({ authClientId: 'external-drive', credentials: memoryCredentials() });
+        const urls: string[] = [];
+        const done = auth.authViaWeb((url) => void urls.push(url));
+        while (urls.length === 0) await Bun.sleep(1);
+        expect(await json(fetch(at('/account')))).toMatchObject({ signIns: { started: 1, approved: 0, pending: 1 } });
+        expect(await json(send('/account/approve'))).toEqual({ approved: 1 });
+        expect((await done).refreshToken).toBe('refresh-1');
+    });
+
+    test('expires the access token, refuses the next refresh, and reports which token each refresh used', async () => {
+        const credentials = memoryCredentials();
+        const { auth } = await account.initAccount({ authClientId: 'external-drive', credentials });
+        const done = auth.authViaWeb(() => void setTimeout(() => account.approve(), 1));
+        await done;
+
+        expect(await json(send('/account/expire'))).toEqual({ expired: 1 });
+        await client.getMyFilesRootFolder();
+        expect(await json(send('/account/refuse-next-refresh'))).toEqual({ refuseNextRefresh: true });
+        await json(send('/account/expire'));
+        await expect(client.getMyFilesRootFolder()).rejects.toMatchObject({ statusCode: 401 });
+
+        expect(await json(fetch(at('/account')))).toEqual({
+            signIns: { started: 1, approved: 1, pending: 0 },
+            refreshes: [
+                { used: 'refresh-1', outcome: 'rotated' },
+                { used: 'refresh-2', outcome: 'refused' },
+            ],
+            refuseNextRefresh: false,
+        });
+    });
+
+    test('a channel started with no clock, faults or account has none of their routes', async () => {
+        for (const [method, path] of [['GET', '/clock'], ['POST', '/clock/advance'], ['GET', '/faults'], ['POST', '/faults'], ['GET', '/account'], ['POST', '/account/approve']]) {
+            expect((await fetch(new URL(path!, control.url), { method })).status).toBe(404);
+        }
+    });
+});
+
+function memoryCredentials(): SessionCredentials {
+    let keyPassword: string | undefined;
+    let info: SessionInfo | undefined;
+    return {
+        get uid() {
+            return info?.uid;
+        },
+        get accessToken() {
+            return info?.accessToken;
+        },
+        get refreshToken() {
+            return info?.refreshToken;
+        },
+        on: () => {},
+        isLoggedIn: () => !!keyPassword && !!info,
+        isTelemetryEnabled: () => false,
+        getUserKeyPassword: () => keyPassword,
+        load: async () => {},
+        setUserKeyPassword: async (value) => void (keyPassword = value),
+        setSessionInfo: async (value) => void (info = value),
+        setTelemetryEnabled: async () => {},
+        signOut: async () => {
+            keyPassword = undefined;
+            info = undefined;
+        },
+    };
+}

@@ -14,12 +14,27 @@
  *   POST /trash    {path}                                     -> {uid}
  *   POST /events/fire                                         -> {scopes}: polls the event scheduler
  *
- * Errors: 404 for no node at the path or an unknown route, 409 for a name that is taken, 400 for
- * a bad request. Each error body is `{error}`.
+ * With the clock, the faults and the account (the Receive arm always has them):
+ *
+ *   GET  /clock                        {now}: the clock's time, in ms since the epoch
+ *   POST /clock/advance  {seconds}     -> {now, fired}: moves the clock on, and fires each timer due
+ *   GET  /faults                       the faults no call has consumed yet (Fault[], faults.ts)
+ *   POST /faults   {kind, operation, path}                    -> {pending}
+ *   GET  /account                      the sign-ins and the refreshes (AccountReport, account.ts)
+ *   POST /account/approve              -> {approved}: approves the sign-ins that wait
+ *   POST /account/expire               -> {expired}: expires the access token of every session
+ *   POST /account/refuse-next-refresh  -> {refuseNextRefresh: true}
+ *
+ * Errors: 404 for no node at the path or an unknown route, 409 for a name that is taken or an
+ * approval with no sign-in waiting, 400 for a bad request or a fault that cannot occur. Each error
+ * body is `{error}`.
  */
 import { NodeWithSameNameExistsValidationError, ValidationError } from '@protontech/drive-sdk';
 
+import type { FakeAccount } from './account.ts';
+import type { FakeClock } from './clock.ts';
 import { type AddSpec, type FakeDrive, type FakeDriveClient, NoSuchNodeError } from './drive.ts';
+import { type Fault, FaultError, type Faults } from './faults.ts';
 
 export type ControlChannel = {
     /** `http://127.0.0.1:<port>/` */
@@ -28,10 +43,20 @@ export type ControlChannel = {
     stop(): Promise<void>;
 };
 
-class BadRequest extends Error {}
+/** What the control channel also drives, when it has it. */
+export type ControlExtras = {
+    clock?: FakeClock;
+    faults?: Faults;
+    account?: FakeAccount;
+};
 
-export function startControlChannel(drive: FakeDrive, client: FakeDriveClient): ControlChannel {
-    const routes: Record<string, (request: Request, url: URL) => Promise<Response> | Response> = {
+type Route = (request: Request, url: URL) => Promise<Response> | Response;
+
+class BadRequest extends Error {}
+class Conflict extends Error {}
+
+export function startControlChannel(drive: FakeDrive, client: FakeDriveClient, extras: ControlExtras = {}): ControlChannel {
+    const routes: Record<string, Route> = {
         'GET /node': (_, url) => Response.json(drive.nodeAt(param(url, 'path'))),
         'GET /content': (_, url) =>
             new Response(drive.content(param(url, 'path'), url.searchParams.get('revision') ?? undefined), {
@@ -53,6 +78,9 @@ export function startControlChannel(drive: FakeDrive, client: FakeDriveClient): 
             return Response.json({ uid: drive.trash(field(body, 'path')) });
         },
         'POST /events/fire': async () => Response.json({ scopes: await client.fireEventScheduler() }),
+        ...clockRoutes(extras.clock),
+        ...faultRoutes(extras.faults),
+        ...accountRoutes(extras.account),
     };
 
     const server = Bun.serve({
@@ -67,8 +95,8 @@ export function startControlChannel(drive: FakeDrive, client: FakeDriveClient): 
             } catch (error: unknown) {
                 const message = error instanceof Error ? error.message : String(error);
                 if (error instanceof NoSuchNodeError) return failure(404, message);
-                if (error instanceof NodeWithSameNameExistsValidationError) return failure(409, message);
-                if (error instanceof BadRequest || error instanceof ValidationError) return failure(400, message);
+                if (error instanceof NodeWithSameNameExistsValidationError || error instanceof Conflict) return failure(409, message);
+                if (error instanceof BadRequest || error instanceof ValidationError || error instanceof FaultError) return failure(400, message);
                 return failure(500, message);
             }
         },
@@ -78,6 +106,47 @@ export function startControlChannel(drive: FakeDrive, client: FakeDriveClient): 
     return {
         url: new URL(`http://127.0.0.1:${server.port}/`),
         stop: () => (stopped ??= server.stop(true)),
+    };
+}
+
+function clockRoutes(clock: FakeClock | undefined): Record<string, Route> {
+    if (!clock) return {};
+    return {
+        'GET /clock': () => Response.json({ now: clock.now() }),
+        'POST /clock/advance': async (request) => {
+            const seconds = (await jsonBody(request)).seconds;
+            const ms = typeof seconds === 'number' ? seconds * 1000 : Number.NaN;
+            if (!Number.isFinite(clock.now() + ms) || ms < 0) throw new BadRequest('seconds is not a number of 0 or more that the clock can reach');
+            return Response.json(await clock.advance(ms));
+        },
+    };
+}
+
+function faultRoutes(faults: Faults | undefined): Record<string, Route> {
+    if (!faults) return {};
+    return {
+        'GET /faults': () => Response.json(faults.pending()),
+        'POST /faults': async (request) => {
+            faults.add((await jsonBody(request)) as Fault);
+            return Response.json({ pending: faults.pending() });
+        },
+    };
+}
+
+function accountRoutes(account: FakeAccount | undefined): Record<string, Route> {
+    if (!account) return {};
+    return {
+        'GET /account': () => Response.json(account.report()),
+        'POST /account/approve': () => {
+            const approved = account.approve();
+            if (approved === 0) throw new Conflict('no sign-in waits for an approval');
+            return Response.json({ approved });
+        },
+        'POST /account/expire': () => Response.json({ expired: account.expireAccessToken() }),
+        'POST /account/refuse-next-refresh': () => {
+            account.refuseNextRefresh();
+            return Response.json({ refuseNextRefresh: true });
+        },
     };
 }
 

@@ -18,7 +18,7 @@
  * `FakeDrive.open(DIR)` and call `add`.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
@@ -46,6 +46,10 @@ import {
     ValidationError,
 } from '@protontech/drive-sdk';
 
+import { type Clock, FakeClock, type TimerHandle } from './clock.ts';
+import { type Fault, faultError, type Faults, type Operation } from './faults.ts';
+import { StateFile } from './state-file.ts';
+
 /** The part of `ProtonDriveClient` the product uses: the prototype's `DriveSdk` pick. */
 export type SdkSurface = Pick<
     ProtonDriveClient,
@@ -68,8 +72,11 @@ export type SdkSurface = Pick<
 export const SCOPE_ID = 'volume-1';
 const OWNER = 'receive-arm@fake-drive.invalid';
 const DOWNLOAD_CHUNK = 64 * 1024;
-const NAME_TAKEN = 2500;
+/** The NAME_TAKEN code the SDK gives with a name clash. */
+export const NAME_TAKEN = 2500;
 const MAX_NAME_LENGTH = 255;
+/** The SDK polls the events of the user's own volume every 30 s (plus up to 1 s of jitter, left out here). */
+export const EVENT_POLL_MS = 30_000;
 
 /** `DIR/drive.json`. Dates are ISO 8601 strings. */
 export type DriveState = {
@@ -143,24 +150,30 @@ type Content = { content: Uint8Array; mediaType: string; declaredSize: number | 
 
 export class FakeDrive {
     private state!: DriveState;
-    private seen?: string;
 
-    private constructor(private readonly dir: string) {}
+    private constructor(
+        private readonly dir: string,
+        private readonly file: StateFile<DriveState>,
+    ) {
+        this.sync();
+    }
 
     /** Opens the Drive kept in `dir`, and creates an empty one there if it holds none. */
     static open(dir: string): FakeDrive {
         mkdirSync(join(dir, 'blobs'), { recursive: true });
-        const drive = new FakeDrive(dir);
-        if (existsSync(drive.statePath)) {
-            drive.reload();
-        } else {
+        const file = new StateFile<DriveState>(join(dir, 'drive.json'), () => {
             const now = new Date().toISOString();
             const rootUid = `${SCOPE_ID}~link-1`;
-            drive.state = { format: 1, rootUid, nextId: 2, nextEventId: 1, nodes: {}, events: [] };
-            drive.state.nodes[rootUid] = { uid: rootUid, name: 'root', type: 'folder', created: now, modified: now, revisions: [] };
-            drive.save();
-        }
-        return drive;
+            return {
+                format: 1,
+                rootUid,
+                nextId: 2,
+                nextEventId: 1,
+                nodes: { [rootUid]: { uid: rootUid, name: 'root', type: 'folder', created: now, modified: now, revisions: [] } },
+                events: [],
+            };
+        });
+        return new FakeDrive(dir, file);
     }
 
     get rootUid(): string {
@@ -192,6 +205,19 @@ export class FakeDrive {
             ...revision,
             state: index === node.revisions.length - 1 ? 'active' : 'superseded',
         }));
+    }
+
+    /**
+     * The path of the node `uid` (as `nodeAt` takes it), or undefined when there is no such node or
+     * when it takes no path: it or a folder above it is trashed.
+     */
+    pathOfUid(uid: string): string | undefined {
+        this.sync();
+        for (let at: NodeRecord | undefined = this.state.nodes[uid]; at; at = at.parentUid ? this.state.nodes[at.parentUid] : undefined) {
+            if (at.trashed) return undefined;
+        }
+        const node = this.state.nodes[uid];
+        return node && this.pathOf(node);
     }
 
     trashed(): NodeInfo[] {
@@ -359,44 +385,17 @@ export class FakeDrive {
 
     // --- internals ----------------------------------------------------------
 
-    private get statePath(): string {
-        return join(this.dir, 'drive.json');
-    }
-
     /** Runs `fn` on the latest state and saves what it changed. When `fn` or the save throws, nothing changes. */
     private change<T>(fn: () => T): T {
-        this.sync();
-        try {
-            const result = fn();
-            this.save();
-            return result;
-        } catch (error: unknown) {
-            this.reload();
-            throw error;
-        }
+        return this.file.change((state) => {
+            this.state = state;
+            return fn();
+        });
     }
 
-    /** Reloads the state when another process saved it since this one last read or wrote it. */
+    /** Takes the latest state, which another process may have saved since this one last read it. */
     private sync(): void {
-        if (this.stamp() !== this.seen) this.reload();
-    }
-
-    private reload(): void {
-        this.state = JSON.parse(readFileSync(this.statePath, 'utf8')) as DriveState;
-        if (this.state.format !== 1) throw new Error(`fake-drive: ${this.statePath} has format ${String(this.state.format)}, not 1`);
-        this.seen = this.stamp();
-    }
-
-    private save(): void {
-        const temporary = `${this.statePath}.${process.pid}.tmp`;
-        writeFileSync(temporary, `${JSON.stringify(this.state, null, 2)}\n`);
-        renameSync(temporary, this.statePath);
-        this.seen = this.stamp();
-    }
-
-    private stamp(): string | undefined {
-        const stat = statSync(this.statePath, { throwIfNoEntry: false });
-        return stat && `${stat.ino}:${stat.mtimeMs}:${stat.size}`;
+        this.state = this.file.read() as DriveState;
     }
 
     private writeBlob(content: Uint8Array): string {
@@ -482,16 +481,36 @@ export class FakeDrive {
     }
 }
 
+/** Checks the product's session before each Drive call, as the SDK's HTTP client does (account.ts). */
+export type DriveAuthorizer = {
+    /** Resolves when the product's access token is good, after a refresh if one is needed; throws otherwise. */
+    authorize(): Promise<void>;
+};
+
+export type FakeDriveClientOptions = {
+    /** The faults to raise (faults.ts). None when absent. */
+    faults?: Faults;
+    /** The clock the event scheduler polls on (clock.ts). When absent, it polls only when fired. */
+    clock?: Clock;
+    /** Checked first on every call (account.ts). When absent, every call is authorized. */
+    account?: DriveAuthorizer;
+};
+
 /**
  * The SDK surface over a `FakeDrive`: what the product gets in place of `ProtonDriveClient`.
  * It gives every node, the ones the product must hide included (trashed, a name it cannot
  * decrypt, a file with no clear-text size), so the product's own filter is what hides them.
+ *
+ * Every call is counted, then checks the account, then meets its fault, if one is set.
  */
 export class FakeDriveClient implements SdkSurface {
     private readonly schedulers = new Set<FakeScheduler>();
     private readonly counts: CallCounts = { methods: {}, listings: {}, nodeLoads: {}, downloads: {} };
 
-    constructor(private readonly drive: FakeDrive) {}
+    constructor(
+        private readonly drive: FakeDrive,
+        private readonly options: FakeDriveClientOptions = {},
+    ) {}
 
     calls(): CallCounts {
         return structuredClone(this.counts);
@@ -506,11 +525,13 @@ export class FakeDriveClient implements SdkSurface {
 
     async getMyFilesRootFolder(): Promise<NodeEntity> {
         this.count('getMyFilesRootFolder');
+        await this.enter('getMyFilesRootFolder', '');
         return this.entity(this.drive.rootUid);
     }
 
     async *iterateFolderChildrenNodeUids(parent: NodeOrUid, filterOptions?: { type?: NodeType }): AsyncGenerator<string> {
         this.count('iterateFolderChildrenNodeUids', 'listings', uidOf(parent));
+        await this.enter('iterateFolderChildrenNodeUids', this.drive.pathOfUid(uidOf(parent)));
         // As the SDK: it loads the parent first, and the API filters by folder only.
         this.requireRecord(uidOf(parent));
         if (filterOptions?.type !== undefined && filterOptions.type !== NodeType.Folder) {
@@ -524,6 +545,7 @@ export class FakeDriveClient implements SdkSurface {
 
     async *iterateNodes(uids: NodeOrUid[]): AsyncGenerator<MaybeMissingNode> {
         this.count('iterateNodes', 'nodeLoads', ...uids.map(uidOf));
+        await this.enter('iterateNodes', ...uids.map((uid) => this.drive.pathOfUid(uidOf(uid))));
         for (const uid of uids.map(uidOf)) {
             yield this.drive.record(uid) ? this.entity(uid) : { missingUid: uid };
         }
@@ -531,54 +553,64 @@ export class FakeDriveClient implements SdkSurface {
 
     async getNode(uid: NodeOrUid): Promise<NodeEntity> {
         this.count('getNode', 'nodeLoads', uidOf(uid));
+        await this.enter('getNode', this.drive.pathOfUid(uidOf(uid)));
         return this.entity(uidOf(uid));
     }
 
     async createFolder(parent: NodeOrUid, name: string, modificationTime?: Date): Promise<NodeEntity> {
         this.count('createFolder');
+        await this.enter('createFolder', ...this.created(uidOf(parent), name));
         return this.entity(this.drive.createFolder(uidOf(parent), name, modificationTime));
     }
 
     async getFileUploader(parent: NodeOrUid, name: string, metadata: UploadMetadata, signal?: AbortSignal): Promise<FileUploader> {
         this.count('getFileUploader');
         const parentUid = uidOf(parent);
+        const fault = await this.enter('getFileUploader', ...this.created(parentUid, name));
         validateName(name);
         this.drive.checkFreeName(parentUid, name);
-        return uploader(metadata, signal, (content) => this.drive.createFile(parentUid, name, content));
+        return uploader(metadata, signal, (content) => this.drive.createFile(parentUid, name, content), fault);
     }
 
     async getFileRevisionUploader(uid: NodeOrUid, metadata: UploadMetadata, signal?: AbortSignal): Promise<FileUploader> {
         this.count('getFileRevisionUploader');
         const nodeUid = uidOf(uid);
+        const fault = await this.enter('getFileRevisionUploader', this.drive.pathOfUid(nodeUid));
         this.requireRecord(nodeUid);
-        return uploader(metadata, signal, (content) => this.drive.createRevision(nodeUid, content));
+        return uploader(metadata, signal, (content) => this.drive.createRevision(nodeUid, content), fault);
     }
 
     async getFileDownloader(uid: NodeOrUid, signal?: AbortSignal): Promise<FileDownloader> {
         this.count('getFileDownloader', 'downloads', uidOf(uid));
+        const fault = await this.enter('getFileDownloader', this.drive.pathOfUid(uidOf(uid)));
         const node = this.requireRecord(uidOf(uid));
         const revision = node.revisions.at(-1);
         if (!revision) throw new ValidationError(`fake-drive: ${node.name} is not a file`);
         const content = this.drive.revisionContent(revision);
         const claimedSize = node.clearTextSize === false ? undefined : revision.size;
+        // An integrity fault fails the download before its first byte.
+        const failure = fault?.kind === 'integrity' ? faultError('integrity') : undefined;
         // As the SDK: one downloader downloads once, by either method.
         let started = false;
         const download = (writable: WritableStream): DownloadController => {
             if (started) throw new Error('Download already started');
             started = true;
-            const done = writeAll(content, writable, signal);
+            const done = failure ? Promise.reject(failure) : writeAll(content, writable, signal);
+            // The caller may never await completion; keep a failure from being an unhandled rejection.
+            done.catch(() => {});
             return { pause() {}, resume() {}, completion: () => done, isDownloadCompleteWithSignatureIssues: () => false };
         };
         return {
             getClaimedSizeInBytes: () => claimedSize,
             downloadToStream: download,
             unsafeDownloadToStream: download,
-            getSeekableStream: () => seekable(content),
+            getSeekableStream: () => (failure ? failingSeekable(failure) : seekable(content)),
         };
     }
 
     async *trashNodes(uids: NodeOrUid[]): AsyncGenerator<NodeResult> {
         this.count('trashNodes');
+        await this.enter('trashNodes', ...uids.map((uid) => this.drive.pathOfUid(uidOf(uid))));
         for (const uid of uids.map(uidOf)) {
             try {
                 this.drive.trashNode(uid);
@@ -591,6 +623,7 @@ export class FakeDriveClient implements SdkSurface {
 
     async *moveNodes(uids: NodeOrUid[], newParent: NodeOrUid): AsyncGenerator<NodeResult> {
         this.count('moveNodes');
+        await this.enter('moveNodes', ...uids.map((uid) => this.drive.pathOfUid(uidOf(uid))));
         for (const uid of uids.map(uidOf)) {
             try {
                 this.drive.moveNode(uid, uidOf(newParent));
@@ -603,12 +636,14 @@ export class FakeDriveClient implements SdkSurface {
 
     async renameNode(uid: NodeOrUid, newName: string): Promise<NodeEntity> {
         this.count('renameNode');
+        await this.enter('renameNode', this.drive.pathOfUid(uidOf(uid)));
         return this.entity(this.drive.renameNode(uidOf(uid), newName));
     }
 
     async getEventScheduler(callback: (scopeId: string) => Promise<void>): Promise<EventScheduler> {
         this.count('getEventScheduler');
-        const scheduler = new FakeScheduler(callback);
+        await this.enter('getEventScheduler', '');
+        const scheduler = new FakeScheduler(callback, this.options.clock);
         this.schedulers.add(scheduler);
         // The SDK's EventScheduler is a class with private fields; this fake has its public methods.
         return scheduler as unknown as EventScheduler;
@@ -616,12 +651,31 @@ export class FakeDriveClient implements SdkSurface {
 
     async *iterateEvents(scopeId: string, lastEventId?: string): AsyncGenerator<DriveEvent> {
         this.count('iterateEvents');
+        await this.enter('iterateEvents', '');
         if (scopeId !== SCOPE_ID) return;
         if (lastEventId === undefined) {
             yield { type: DriveEventType.FastForward, treeEventScopeId: scopeId, eventId: this.drive.latestEventId() };
             return;
         }
         yield* this.drive.eventsAfter(lastEventId);
+    }
+
+    /**
+     * What every call does after it is counted: it checks the account, then meets the first fault
+     * set for `operation` on one of `targets`. A fault that is an error is thrown here; an
+     * `integrity` or `upload-part-way` fault is returned for the call to act on.
+     */
+    private async enter(operation: Operation, ...targets: (string | undefined)[]): Promise<Fault | undefined> {
+        await this.options.account?.authorize();
+        const fault = this.options.faults?.take(operation, targets);
+        if (!fault || fault.kind === 'integrity' || fault.kind === 'upload-part-way') return fault;
+        throw faultError(fault.kind);
+    }
+
+    /** The targets of a call that creates `name` in the folder `parentUid`: the folder, and the new path. */
+    private created(parentUid: string, name: string): (string | undefined)[] {
+        const parent = this.drive.pathOfUid(parentUid);
+        return [parent, parent === undefined ? undefined : parent ? `${parent}/${name}` : name];
     }
 
     private count(method: string, per?: Exclude<keyof CallCounts, 'methods'>, ...uids: string[]): void {
@@ -677,16 +731,26 @@ export class FakeDriveClient implements SdkSurface {
     }
 }
 
-/** Stands in for the SDK's `EventScheduler`. It polls when a scope is added, then only when fired: no timer. */
+/**
+ * Stands in for the SDK's `EventScheduler`. It polls when a scope is added and when fired. With a
+ * clock, it also polls each scope `EVENT_POLL_MS` after its last poll ends, as the SDK's timer does
+ * for the user's own volume. With no clock, it has no timer.
+ */
 class FakeScheduler {
-    private readonly scopes = new Set<string>();
+    /** Each scope, and its timer for the next poll. */
+    private readonly scopes = new Map<string, TimerHandle | undefined>();
+    /** Each scope's poll in progress, so that the next one waits for it. */
+    private readonly running = new Map<string, Promise<void>>();
 
-    constructor(private readonly callback: (scopeId: string) => Promise<void>) {}
+    constructor(
+        private readonly callback: (scopeId: string) => Promise<void>,
+        private readonly clock?: Clock,
+    ) {}
 
     addScope(scopeId: string): void {
         if (this.scopes.has(scopeId)) return;
-        this.scopes.add(scopeId);
-        void this.callback(scopeId);
+        this.scopes.set(scopeId, undefined);
+        void this.poll(scopeId);
     }
 
     setForeground(): void {}
@@ -694,13 +758,38 @@ class FakeScheduler {
     setBackground(): void {}
 
     removeScope(scopeId: string): void {
+        this.clock?.clearTimeout(this.scopes.get(scopeId));
         this.scopes.delete(scopeId);
     }
 
     async pollNow(): Promise<string[]> {
-        const scopes = [...this.scopes];
-        for (const scopeId of scopes) await this.callback(scopeId);
+        const scopes = [...this.scopes.keys()];
+        for (const scopeId of scopes) await this.poll(scopeId);
         return scopes;
+    }
+
+    /**
+     * As the SDK: a poll starts only once the poll before it ends, and the next timed poll is set
+     * only once this one ends, so two polls never overlap.
+     */
+    private poll(scopeId: string): Promise<void> {
+        const start = () => {
+            this.clock?.clearTimeout(this.scopes.get(scopeId));
+            return this.callback(scopeId).finally(() => {
+                if (!this.clock || !this.scopes.has(scopeId)) return;
+                this.scopes.set(scopeId, this.clock.setTimeout(() => this.poll(scopeId), EVENT_POLL_MS));
+            });
+        };
+        const before = this.running.get(scopeId);
+        const run = before ? before.then(start) : start();
+        const settled = run.catch(() => {});
+        this.running.set(scopeId, settled);
+        void settled.then(() => {
+            if (this.running.get(scopeId) === settled) this.running.delete(scopeId);
+        });
+        // A move of the clock waits for the poll, as for a timer it fired.
+        if (this.clock instanceof FakeClock) this.clock.track(run);
+        return run;
     }
 }
 
@@ -708,9 +797,17 @@ function uploader(
     metadata: UploadMetadata,
     signal: AbortSignal | undefined,
     commit: (content: Content) => { nodeUid: string; nodeRevisionUid: string },
+    fault?: Fault,
 ): FileUploader {
     const upload = async (stream: ReadableStream): Promise<UploadController> => {
         const done = (async () => {
+            if (fault?.kind === 'upload-part-way') {
+                // Read the first part of the content, then fail before the Drive commits anything.
+                const reader = stream.getReader();
+                await reader.read();
+                await reader.cancel();
+                throw faultError('upload-part-way');
+            }
             // A fake may buffer; the SDK encrypts block by block.
             const content = new Uint8Array(await new Response(stream).arrayBuffer());
             if (signal?.aborted) throw new AbortError('fake-drive: upload aborted');
@@ -758,6 +855,15 @@ function seekable(content: Uint8Array): SeekableReadableStream {
         seek: (to: number) => {
             position = to;
         },
+    });
+}
+
+/** A seekable stream whose first read fails with `error`, as a download that fails its integrity check. */
+function failingSeekable(error: Error): SeekableReadableStream {
+    const stream = new ReadableStream<Uint8Array>({ pull: (controller) => controller.error(error) }, { highWaterMark: 0 });
+    return Object.assign(stream, {
+        read: () => Promise.reject(error),
+        seek: () => {},
     });
 }
 
