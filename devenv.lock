@@ -3,11 +3,11 @@
     "cd-pipeline": {
       "flake": false,
       "locked": {
-        "lastModified": 1792526218,
-        "narHash": "sha256-csV//exvYgbkjEtMzrVfaKDFPfJYv8RY/53KyxUvGWw=",
+        "lastModified": 1793370037,
+        "narHash": "sha256-wNQefBav6SsJkge4qvHKX3wSP8tnIUjpOXeppo2xRv8=",
         "ref": "refs/tags/stable",
-        "rev": "934bd79c25ddc6a4573a0749732aafde6a5f0898",
-        "revCount": 394,
+        "rev": "8d6166029d910a5011f82c25a841914031d4ef94",
+        "revCount": 425,
         "type": "git",
         "url": "https://forgejo.clarob.uk/rob/continuous-delivery"
       },

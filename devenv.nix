@@ -41,6 +41,16 @@
 
     records.prefix = "europe-west1-docker.pkg.dev/ai-ci-pipeline/proton-drive-mount";
 
+    frozenSuite = {
+      command = [ "bun" "spec/node_modules/.bin/cucumber-js" "--config" "spec/cucumber.mjs" ];
+      install = "cd spec && bun install --frozen-lockfile";
+      sourceMember = {
+        path = "bin/proton-drive-mount";
+        variable = "PDM_BINARY";
+        revisionVariable = "PDM_REVISION";
+      };
+    };
+
     verbs = {
       commit.tasks.expected-status.exec = ''
         exec cd-expected-status-gate
@@ -81,14 +91,9 @@
         echo "ci:deploy:teardown: a source member has no environment to tear down"
       '';
 
-      # Both stubs pass and judge nothing, as cd-pipeline's own stub for an unbuilt verb does. Each
-      # names the issue that replaces it.
-      acceptance.tasks.frozen-suite.exec = ''
-        echo "ci:acceptance:frozen-suite: not implemented. cd-pipeline ships no suite runner for step definitions that are not Rust, so nothing here applies spec/frozen.lock.json and the ratchet to the cucumber-js suite in spec/, and this run judges no scenario. rob/continuous-delivery#653 replaces it."
-      '';
-
+      # The stub passes and judges nothing, as cd-pipeline's own stub for an unbuilt verb does.
       non-functional-requirements.tasks.spec-reach.exec = ''
-        echo "ci:non-functional-requirements:spec-reach: not implemented. cd-pipeline writes no production diff and gates no spec reach yet, so nothing here measures which production lines the frozen suite executes. rob/continuous-delivery#652 (epic #112) replaces it."
+        echo "ci:non-functional-requirements:spec-reach: not implemented. cd-pipeline v1.7.0 generates ci:acceptance:spec-reach only in a substitute invocation, and the adopter has to supply the instrumented substitute and the run that drives it, so this run measures no spec reach. The task waits on continuous-delivery owning the substitute run."
       '';
     };
   };
