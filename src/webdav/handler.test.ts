@@ -89,7 +89,7 @@ describe('createWebDavHandler', () => {
         const response = await handle(new Request('http://127.0.0.1/', { method: 'OPTIONS' }));
         expect(response.status).toBe(200);
         expect(response.headers.get('DAV')).toBe('1');
-        expect(response.headers.get('Allow')).toBe('OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL');
+        expect(response.headers.get('Allow')).toBe('OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL, MOVE');
         expect(response.headers.get('MS-Author-Via')).toBe('DAV');
     });
 
@@ -125,9 +125,9 @@ describe('createWebDavHandler', () => {
 
     test('a method the serve does not answer yet is 405, naming what it does answer', async () => {
         const { handle } = handler();
-        const response = await handle(new Request('http://127.0.0.1/', { method: 'MOVE' }));
+        const response = await handle(new Request('http://127.0.0.1/', { method: 'COPY' }));
         expect(response.status).toBe(405);
-        expect(response.headers.get('Allow')).toBe('OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL');
+        expect(response.headers.get('Allow')).toBe('OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL, MOVE');
     });
 
     test('a bad path segment is 400, and an unexpected error is 500', async () => {
@@ -638,5 +638,101 @@ describe('rate limit', () => {
         expect(response.status).toBe(503);
         expect(response.headers.get('Retry-After')).toBe('30');
         expect(await response.text()).toContain('rate limit');
+    });
+});
+
+describe('MOVE', () => {
+    /** A tree that records every move call with what it was handed. */
+    function treeWithMoves(existing: Record<string, Entry> = {}, options: { overwrite: boolean } = { overwrite: true }) {
+        const moves: { from: string[]; to: string[]; overwrite: boolean; result: 'created' | 'not-created' }[] = [];
+        const tree = {
+            root: async () => ROOT,
+            list: async () => [],
+            stat: async (segments: string[]) => existing[segments.join('/')],
+            move: async (from: string[], to: string[], overwrite: boolean) => {
+                const entry = existing[to.join('/')];
+                if (entry && !overwrite) {
+                    throw new DriveError(412, `${to[to.length - 1]} already exists`);
+                }
+                const result: 'created' | 'not-created' = entry ? 'not-created' : 'created';
+                moves.push({ from, to, overwrite, result });
+                return {
+                    entry: { ...(entry ?? fileEntry(options.overwrite ? to[to.length - 1] : from[from.length - 1], 12)), uid: from[from.length - 1] === to[to.length - 1] && from.length === 1 ? 'uid-source' : 'uid-moved' },
+                    created: result === 'created',
+                };
+            },
+        } as unknown as DriveTree & { moves: typeof moves };
+        tree.moves = moves;
+        return tree as unknown as DriveTree & { moves: typeof moves };
+    }
+
+    function moveRequest(from: string, to: string, opts: { overwrite?: boolean } = {}) {
+        const url = `http://127.0.0.1${from}`;
+        const headers: HeadersInit = {
+            Destination: `http://127.0.0.1${to}`,
+            Overwrite: opts.overwrite === false ? 'F' : 'T',
+        };
+        return new Request(url, { method: 'MOVE', headers });
+    }
+
+    test('MOVE needs a Destination header', async () => {
+        const tree = treeWithMoves();
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/beach.jpg', { method: 'MOVE' }));
+        expect(response.status).toBe(400);
+        expect(await response.text()).toContain('needs a Destination header');
+    });
+
+    test('MOVE to another host is 502', async () => {
+        const tree = treeWithMoves();
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/beach.jpg', {
+            method: 'MOVE',
+            headers: {
+                Destination: 'http://other.host/beach.jpg',
+                Overwrite: 'T',
+            },
+        }));
+        expect(response.status).toBe(502);
+        expect(await response.text()).toContain('another server');
+    });
+
+    test('MOVE without Overwrite header defaults to T (overwrite)', async () => {
+        const tree = treeWithMoves({ 'Photos/beach.jpg': fileEntry('beach.jpg', 12) });
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(moveRequest('/beach.jpg', '/Photos/beach.jpg'));
+        expect(tree.moves[0]?.overwrite).toBe(true);
+    });
+
+    test('MOVE with Overwrite: F refuses existing target', async () => {
+        const tree = treeWithMoves({ 'Photos/beach.jpg': fileEntry('beach.jpg', 12) });
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/beach.jpg', {
+            method: 'MOVE',
+            headers: {
+                Destination: 'http://127.0.0.1/Photos/beach.jpg',
+                Overwrite: 'F',
+            },
+        }));
+        expect(response.status).toBe(412);
+        expect(await response.text()).toContain('already exists');
+        expect(tree.moves).toEqual([]);
+    });
+
+    test('MOVE to new location returns 201 (created)', async () => {
+        const tree = treeWithMoves();
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(moveRequest('/beach.jpg', '/Photos/beach.jpg'));
+        expect(response.status).toBe(201);
+        expect(tree.moves).toHaveLength(1);
+        expect(tree.moves[0]?.result).toBe('created');
+    });
+
+    test('MOVE overwriting existing file returns 204 (not created)', async () => {
+        const tree = treeWithMoves({ 'Photos/beach.jpg': fileEntry('beach.jpg', 12) });
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(moveRequest('/beach.jpg', '/Photos/beach.jpg'));
+        expect(response.status).toBe(204);
+        expect(tree.moves[0]?.result).toBe('not-created');
     });
 });

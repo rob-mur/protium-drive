@@ -10,7 +10,7 @@ import { parsePath } from './paths';
 import { etagFor, multistatus } from './xml';
 
 /** The methods this serve answers; the other capabilities grow this as they land. */
-const ALLOW = 'OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL';
+const ALLOW = 'OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL, MOVE';
 
 export type HandlerOptions = {
     tree: DriveTree;
@@ -70,6 +70,8 @@ export function createWebDavHandler(options: HandlerOptions): WebDavHandler {
                 return remove(segments);
             case 'MKCOL':
                 return mkcol(request, segments);
+            case 'MOVE':
+                return move(request, segments);
             default:
                 return new Response(`${request.method} is not supported\n`, { status: 405, headers: { Allow: ALLOW } });
         }
@@ -185,6 +187,21 @@ export function createWebDavHandler(options: HandlerOptions): WebDavHandler {
         }
         await tree.createFolder(segments.slice(0, -1), segments[segments.length - 1]);
         return new Response(null, { status: 201 });
+    }
+
+    /** Moves or renames an entry. */
+    async function move(request: Request, segments: string[]): Promise<Response> {
+        const destination = request.headers.get('Destination');
+        if (!destination) {
+            return text(400, 'MOVE needs a Destination header');
+        }
+        const destinationUrl = new URL(destination, request.url);
+        if (destinationUrl.host !== new URL(request.url).host) {
+            return text(502, 'MOVE to another server is not supported');
+        }
+        const overwrite = (request.headers.get('Overwrite') ?? 'T').toUpperCase() !== 'F';
+        const { entry, created } = await tree.move(segments, parsePath(destinationUrl.pathname), overwrite);
+        return new Response(null, { status: created ? 201 : 204 });
     }
 
     async function requireEntry(segments: string[]): Promise<NonNullable<Awaited<ReturnType<typeof tree.stat>>>> {

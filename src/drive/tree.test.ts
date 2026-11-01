@@ -661,3 +661,301 @@ describe('DriveTree backoff', () => {
         });
     });
 });
+
+describe('DriveTree move', () => {
+    /** The SDK surface for moves and renames, recording every call and what it could carry. */
+    function fakeMoveSdk(nodes: Map<string, Node>) {
+        const base = fakeSdk(nodes);
+        const moves: { uid: string; toParent: string }[] = [];
+        const renames: { uid: string; name: string }[] = [];
+        const trashed: string[] = [];
+        return {
+            ...base,
+            moves,
+            renames,
+            trashed,
+            renameNode: async (uid: string, name: string) => {
+                renames.push({ uid, name });
+                const node = nodes.get(uid)!;
+                node.name = { ok: true, value: name };
+            },
+            moveNodes: async function* (uids: NodeOrUid[], toParent: string) {
+                base.calls.set('moveNodes', (base.calls.get('moveNodes') ?? 0) + 1);
+                for (const nodeOrUid of uids) {
+                    const uid = typeof nodeOrUid === 'string' ? nodeOrUid : nodeOrUid.uid;
+                    moves.push({ uid, toParent });
+                    const node = nodes.get(uid)!;
+                    node.parentUid = toParent;
+                }
+            },
+            trashNodes: async function* (uids: NodeOrUid[]) {
+                base.calls.set('trashNodes', (base.calls.get('trashNodes') ?? 0) + 1);
+                for (const nodeOrUid of uids) {
+                    const uid = typeof nodeOrUid === 'string' ? nodeOrUid : nodeOrUid.uid;
+                    trashed.push(uid);
+                    const node = nodes.get(uid)!;
+                    node.trashTime = new Date('2026-02-03T00:00:00Z');
+                }
+            },
+            getNode: async (uid: NodeOrUid) => {
+                const key = typeof uid === 'string' ? uid : uid.uid;
+                return nodes.get(key)!;
+            },
+            iterateNodes: async function* (uids: NodeOrUid[]) {
+                for (const uid of uids) {
+                    const key = typeof uid === 'string' ? uid : uid.uid;
+                    yield (nodes.get(key) ?? { missingUid: key }) as MaybeMissingNode;
+                }
+            },
+            iterateFolderChildrenNodeUids: async function* (parent: NodeOrUid) {
+                const uid = typeof parent === 'string' ? parent : parent.uid;
+                for (const node of nodes.values()) {
+                    if (node.parentUid === uid) {
+                        yield node.uid;
+                    }
+                }
+            },
+        } as unknown as DriveSdk & typeof base & {
+            moves: { uid: string; toParent: string }[];
+            renames: { uid: string; name: string }[];
+            trashed: string[];
+        };
+    }
+
+    test('renaming a file keeps the same file (same UID, just name changed)', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['beach', file('beach', 'beach.jpg', 'root')],
+        ]);
+        const sdk = fakeMoveSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+
+        const { entry, created } = await tree.move(['beach.jpg'], ['shore.jpg'], true);
+
+        expect(created).toBe(true);
+        expect(entry).toMatchObject({ uid: 'beach', name: 'shore.jpg', kind: 'file' });
+        expect(sdk.renames).toEqual([{ uid: 'beach', name: 'shore.jpg' }]);
+        expect(sdk.moves).toEqual([]);
+        expect(sdk.trashed).toEqual([]);
+        // After rename, the source name no longer exists
+        expect((nodes.get('beach')!.name as { ok: boolean; value: string }).value).toBe('shore.jpg');
+    });
+
+    test('moving a file to another folder keeps the same file (same UID, moved)', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+            ['beach', file('beach', 'beach.jpg', 'root')],
+        ]);
+        const sdk = fakeMoveSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+
+        const { entry, created } = await tree.move(['beach.jpg'], ['Photos', 'beach.jpg'], true);
+
+        expect(created).toBe(true);
+        expect(entry).toMatchObject({ uid: 'beach', name: 'beach.jpg', kind: 'file' });
+        expect(sdk.moves).toEqual([{ uid: 'beach', toParent: 'photos' }]);
+        expect(sdk.renames).toEqual([]);
+        expect(sdk.trashed).toEqual([]);
+        // After move, the node's parentUid has changed
+        expect(nodes.get('beach')!.parentUid).toBe('photos');
+    });
+
+    test('moving and renaming at once', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+            ['img', file('img', 'IMG_0001.jpg', 'root')],
+        ]);
+        const sdk = fakeMoveSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+
+        const { entry, created } = await tree.move(['IMG_0001.jpg'], ['Photos', 'beach.jpg'], true);
+
+        expect(created).toBe(true);
+        expect(entry).toMatchObject({ uid: 'img', name: 'beach.jpg', kind: 'file' });
+        expect(sdk.moves).toEqual([{ uid: 'img', toParent: 'photos' }]);
+        expect(sdk.renames).toEqual([{ uid: 'img', name: 'beach.jpg' }]);
+        expect(sdk.trashed).toEqual([]);
+    });
+
+    test('moving onto an existing file with overwrite trashes the old one', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['beach', file('beach', 'beach.jpg', 'root')],
+            ['surf', file('surf', 'new.jpg', 'root')],
+        ]);
+        nodes.get('beach')!.name = { ok: true, value: 'beach.jpg' };
+        nodes.get('surf')!.name = { ok: true, value: 'new.jpg' };
+
+        const sdk = fakeMoveSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+
+        const { entry, created } = await tree.move(['new.jpg'], ['beach.jpg'], true);
+
+        expect(created).toBe(false);
+        expect(entry).toMatchObject({ uid: 'surf', name: 'beach.jpg', kind: 'file' });
+        expect(sdk.moves).toEqual([]);
+        expect(sdk.renames).toEqual([{ uid: 'surf', name: 'beach.jpg' }]);
+        expect(sdk.trashed).toEqual(['beach']);
+        expect((nodes.get('beach') as Node).trashTime).toBeDefined();
+    });
+
+    test('moving onto an existing file without overwrite is 412', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['beach', file('beach', 'beach.jpg', 'root')],
+            ['surf', file('surf', 'new.jpg', 'root')],
+        ]);
+
+        const sdk = fakeMoveSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+
+        await expect(tree.move(['new.jpg'], ['beach.jpg'], false)).rejects.toMatchObject({
+            status: 412,
+            message: expect.stringContaining('already exists'),
+        });
+        expect(sdk.moves).toEqual([]);
+        expect(sdk.renames).toEqual([]);
+        expect(sdk.trashed).toEqual([]);
+    });
+
+    test('renaming a folder keeps its files', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['holidays', folder('holidays', '2024', 'root')],
+            ['beach', file('beach', 'beach.jpg', 'holidays')],
+        ]);
+        const sdk = fakeMoveSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+
+        const { entry, created } = await tree.move(['2024'], ['Holidays 2024'], true);
+
+        expect(created).toBe(true);
+        expect(entry).toMatchObject({ uid: 'holidays', name: 'Holidays 2024', kind: 'folder' });
+        expect(sdk.renames).toEqual([{ uid: 'holidays', name: 'Holidays 2024' }]);
+        expect(sdk.moves).toEqual([]);
+        // After rename, the folder's name has changed
+        expect((nodes.get('holidays')!.name as { ok: boolean; value: string }).value).toBe('Holidays 2024');
+        // And files inside the renamed folder are still accessible
+        expect((await tree.stat(['Holidays 2024', 'beach.jpg']))?.uid).toBe('beach');
+    });
+
+    test('moving a folder to another folder', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+            ['vacations', folder('vacations', 'Vacations', 'root')],
+            ['beach', file('beach', 'beach.jpg', 'vacations')],
+        ]);
+        const sdk = fakeMoveSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+
+        const { entry, created } = await tree.move(['Vacations'], ['Photos', 'Vacations'], true);
+
+        expect(created).toBe(true);
+        expect(entry).toMatchObject({ uid: 'vacations', name: 'Vacations', kind: 'folder' });
+        expect(sdk.moves).toEqual([{ uid: 'vacations', toParent: 'photos' }]);
+        expect(sdk.renames).toEqual([]);
+        // Verify the folder and its contents are accessible at the new location
+        expect((await tree.stat(['Photos', 'Vacations', 'beach.jpg']))?.uid).toBe('beach');
+        expect((await tree.stat(['Vacations']))).toBeUndefined();
+    });
+
+    test('moving a folder to another folder with overwrite trashes old', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+            ['vacations', folder('vacations', 'Vacations', 'root')],
+            ['sunset', file('sunset', 'sunset.jpg', 'vacations')],
+            ['old', folder('old', 'Vacations', 'photos')],
+        ]);
+        const sdk = fakeMoveSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+
+        await tree.move(['Vacations'], ['Photos', 'Vacations'], true);
+
+        expect(sdk.trashed).toContain('old');
+        expect(sdk.moves).toEqual([{ uid: 'vacations', toParent: 'photos' }]);
+        // Verify the moved folder and its contents are accessible at the new location
+        expect((await tree.stat(['Photos', 'Vacations']))?.uid).toBe('vacations');
+        expect((await tree.stat(['Photos', 'Vacations', 'sunset.jpg']))?.uid).toBe('sunset');
+    });
+
+    test('moving a folder into a subfolder of itself is refused', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+            ['beach', file('beach', 'beach.jpg', 'photos')],
+        ]);
+        const sdk = fakeMoveSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+
+        await expect(tree.move(['Photos'], ['Photos', 'sunset'], true)).rejects.toMatchObject({
+            status: 409,
+            message: expect.stringContaining('into itself'),
+        });
+        expect(sdk.moves).toEqual([]);
+        expect(sdk.renames).toEqual([]);
+    });
+
+    test('moving a folder onto itself is a no-op', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+            ['beach', file('beach', 'beach.jpg', 'photos')],
+        ]);
+        const sdk = fakeMoveSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+
+        const { entry, created } = await tree.move(['Photos'], ['Photos'], true);
+        expect(created).toBe(false);
+        expect(entry).toMatchObject({ uid: 'photos', name: 'Photos', kind: 'folder' });
+        expect(sdk.moves).toEqual([]);
+        expect(sdk.renames).toEqual([]);
+    });
+
+    test('moving the root folder is refused', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+        ]);
+        const sdk = fakeMoveSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+
+        await expect(tree.move([], ['Photos'], true)).rejects.toMatchObject({
+            status: 403,
+            message: expect.stringContaining('root'),
+        });
+        expect(sdk.moves).toEqual([]);
+    });
+
+    test('moving to a non-existent parent folder is refused', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['beach', file('beach', 'beach.jpg', 'root')],
+        ]);
+        const sdk = fakeMoveSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+
+        await expect(tree.move(['beach.jpg'], ['Missing', 'beach.jpg'], true)).rejects.toMatchObject({
+            status: 409,
+            message: expect.stringContaining('not a folder'),
+        });
+    });
+
+    test('moving a file onto a folder that contains it is refused', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+            ['beach', file('beach', 'beach.jpg', 'photos')],
+        ]);
+        const sdk = fakeMoveSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+
+        // Moving a file to its parent folder is treated as moving onto a folder that contains it
+        await expect(tree.move(['Photos', 'beach.jpg'], ['Photos'], true)).rejects.toMatchObject({
+            status: 409,
+            message: expect.stringContaining('contains it'),
+        });
+    });
+});

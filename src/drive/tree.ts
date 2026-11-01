@@ -104,6 +104,85 @@ export class DriveTree {
     }
 
     /**
+     * Moves and/or renames an entry. With `overwrite`, an existing target goes
+     * to trash first. The entry keeps its UID and revisions.
+     */
+    async move(
+        fromSegments: string[],
+        toSegments: string[],
+        overwrite: boolean,
+    ): Promise<{ entry: Entry; created: boolean }> {
+        if (fromSegments.length === 0 || toSegments.length === 0) {
+            throw new DriveError(403, 'The root folder cannot be moved');
+        }
+        const fromEntry = await this.stat(fromSegments);
+        if (!fromEntry) {
+            throw new DriveError(404, `/${fromSegments.join('/')} not found`);
+        }
+        const toParent = toSegments.slice(0, -1);
+        const newName = toSegments[toSegments.length - 1];
+
+        if (this.isPrefix(fromSegments, toSegments)) {
+            throw new DriveError(409, 'Cannot move a folder into itself');
+        }
+        if (this.isPrefix(toSegments, fromSegments)) {
+            throw new DriveError(409, 'Cannot move an entry onto a folder that contains it');
+        }
+
+        const targetParent = await this.stat(toParent);
+        if (!targetParent || targetParent.kind !== 'folder') {
+            throw new DriveError(409, `/${toParent.join('/')} is not a folder`);
+        }
+
+        const targetListing = await this.listing(targetParent.uid);
+        const target = targetListing.get(newName);
+        if (target?.uid === fromEntry.uid) {
+            return { entry: fromEntry, created: false };
+        }
+
+        if (target) {
+            if (!overwrite) {
+                throw new DriveError(412, `${newName} already exists`);
+            }
+            await this.trash(toSegments);
+        }
+
+        const fromParent = fromSegments.slice(0, -1);
+        const fromParentEntry = fromSegments.length >= 1 ? await this.stat(fromParent) : undefined;
+        const fromParentUid = fromParentEntry?.uid;
+
+        try {
+            if (fromParentUid !== targetParent.uid) {
+                await this.backoff.run(async () => {
+                    for await (const result of this.sdk.moveNodes([fromEntry.uid], targetParent.uid)) {
+                        if (!result.ok) {
+                            throw result.error;
+                        }
+                    }
+                });
+            }
+            if (fromEntry.name !== newName) {
+                await this.backoff.run(() => this.sdk.renameNode(fromEntry.uid, newName));
+            }
+        } finally {
+            this.forget(fromEntry);
+            if (fromParentUid) {
+                this.listings.delete(fromParentUid);
+            }
+            this.listings.delete(targetParent.uid);
+        }
+
+        const node = await this.sdk.getNode(fromEntry.uid);
+        const entry = toEntry(node as NodeEntity) as Entry;
+        return { entry, created: !target };
+    }
+
+    /** Checks if `segments` is a proper prefix of `potentialChild`. */
+    private isPrefix(segments: string[], potentialChild: string[]): boolean {
+        return segments.length < potentialChild.length && segments.every((s, i) => s === potentialChild[i]);
+    }
+
+    /**
      * Creates a folder under `parentSegments`. An existing name of any kind is
      * a 405; the parent's cached listing is dropped, so the next ask shows
      * the new folder.
