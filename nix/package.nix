@@ -3,6 +3,8 @@
   stdenvNoCC,
   bun,
   makeWrapper,
+  # The git revision this build was made from; --version names it.
+  revision ? "unknown",
 }:
 
 let
@@ -60,7 +62,9 @@ stdenvNoCC.mkDerivation {
     mkdir -p $app $out/bin
     cp -R package.json tsconfig.json src vendor $app/
     ln -s ${nodeModules}/node_modules $app/node_modules
-    makeWrapper ${lib.getExe bun} $out/bin/proton-drive-mount --add-flags "$app/src/main.ts"
+    makeWrapper ${lib.getExe bun} $out/bin/proton-drive-mount \
+      --set PDM_BUILD_REVISION ${lib.escapeShellArg revision} \
+      --add-flags "$app/src/main.ts"
     runHook postInstall
   '';
 

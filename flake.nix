@@ -16,7 +16,11 @@
     in
     {
       packages = forAllSystems (pkgs: rec {
-        proton-drive-mount = pkgs.callPackage ./nix/package.nix { };
+        proton-drive-mount = pkgs.callPackage ./nix/package.nix {
+          # The revision the binary names in --version. `rev` is set for a
+          # clean tree, `dirtyRev` for a dirty one.
+          revision = self.rev or self.dirtyRev or "unknown";
+        };
         default = proton-drive-mount;
       });
 
