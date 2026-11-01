@@ -19,6 +19,9 @@ let
       ../tsconfig.json
       ../patches
       ../src
+      # `--fake-drive` runs the Receive arm from the product, so the package
+      # ships it beside src/ (src/proton/connect.ts imports it).
+      ../fake-drive
       ../vendor
     ];
   };
@@ -60,7 +63,7 @@ stdenvNoCC.mkDerivation {
     runHook preInstall
     app=$out/lib/proton-drive-mount
     mkdir -p $app $out/bin
-    cp -R package.json tsconfig.json src vendor $app/
+    cp -R package.json tsconfig.json src fake-drive vendor $app/
     ln -s ${nodeModules}/node_modules $app/node_modules
     makeWrapper ${lib.getExe bun} $out/bin/proton-drive-mount \
       --set PDM_BUILD_REVISION ${lib.escapeShellArg revision} \
