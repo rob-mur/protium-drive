@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { NodeType, type MaybeMissingNode, type NodeEntity, type NodeOrUid } from '@protontech/drive-sdk';
+import { NodeType, type MaybeMissingNode, type NodeEntity, type NodeOrUid, RateLimitedError } from '@protontech/drive-sdk';
 
+import { Backoff } from './backoff.ts';
 import { DriveTree } from './tree.ts';
 import type { DriveSdk } from './sdk.ts';
 
@@ -554,5 +555,55 @@ describe('DriveTree createFolder', () => {
         const tree = new DriveTree(sdk as never, QUIET);
         expect(tree.createFolder(['Nope'], '2025')).rejects.toMatchObject({ status: 409 });
         expect(sdk.created).toEqual([]);
+    });
+});
+
+describe('DriveTree backoff', () => {
+    function rateLimitedSdk(nodes: Map<string, Node>, failingCalls: number[]) {
+        const sdk = fakeSdk(nodes);
+        let call = 0;
+        const oldIterate = sdk.iterateFolderChildrenNodeUids.bind(sdk);
+        sdk.iterateFolderChildrenNodeUids = async function* (parent: NodeOrUid) {
+            if (failingCalls.includes(call++)) {
+                throw new RateLimitedError('fake: Too many server requests');
+            }
+            yield* oldIterate(parent);
+        };
+        return sdk;
+    }
+
+    test('a rate-limited listing is refused as 503 with Retry-After, then resumes after the pause', async () => {
+        let now = 0;
+        const nodes = new Map([
+            [ 'root', folder('root', 'My files') ],
+            [ 'beach', file('beach', 'beach.jpg', 'root') ],
+        ]);
+        const tree = new DriveTree(rateLimitedSdk(nodes, [0]) as never, QUIET, new Backoff(() => now));
+        // The rate limit itself comes out as the SDK's error; the handler maps it to 503.
+        await expect(tree.stat(['beach.jpg'])).rejects.toBeInstanceOf(RateLimitedError);
+        // Inside the pause, the ask is refused without reaching the SDK again.
+        await expect(tree.stat(['beach.jpg'])).rejects.toMatchObject({ status: 503, retryAfterSeconds: 30 });
+        now += 31_000;
+        expect((await tree.stat(['beach.jpg']))?.name).toBe('beach.jpg');
+    });
+
+    test('a succeeded call resets the next pause to 30 seconds', async () => {
+        let now = 0;
+        const nodes = new Map([
+            [ 'root', folder('root', 'My files') ],
+            [ 'beach', file('beach', 'beach.jpg', 'root') ],
+        ]);
+        const backoff = new Backoff(() => now);
+        const sdk = rateLimitedSdk(nodes, [0, 2]) as never;
+        await expect(new DriveTree(sdk, QUIET, backoff).stat(['beach.jpg'])).rejects.toBeInstanceOf(RateLimitedError);
+        now += 31_000;
+        // A fresh tree stands for the next ask, since a succeeded listing stays cached.
+        await new DriveTree(sdk, QUIET, backoff).stat(['beach.jpg']);
+        now += 31_000;
+        await expect(new DriveTree(sdk, QUIET, backoff).stat(['beach.jpg'])).rejects.toBeInstanceOf(RateLimitedError);
+        await expect(new DriveTree(sdk, QUIET, backoff).stat(['beach.jpg'])).rejects.toMatchObject({
+            status: 503,
+            retryAfterSeconds: 30,
+        });
     });
 });

@@ -2,6 +2,7 @@ import type { NodeEntity } from '@protontech/drive-sdk';
 
 import type { Logger } from '../../vendor/proton-drive-sdk-account';
 
+import { Backoff } from './backoff';
 import { openDownload, type ByteRange } from './download';
 import { type Entry, isSkipped, toEntry } from './entry';
 import { DriveError } from './errors';
@@ -34,6 +35,7 @@ export class DriveTree {
     constructor(
         private readonly sdk: DriveSdk,
         private readonly logger: Logger,
+        readonly backoff: Backoff = new Backoff(),
     ) {}
 
     /** The served root: My files. */
@@ -78,11 +80,13 @@ export class DriveTree {
         if (!entry) {
             throw new DriveError(404, `/${segments.join('/')} not found`);
         }
-        for await (const result of this.sdk.trashNodes([entry.uid])) {
-            if (!result.ok) {
-                throw result.error;
+        await this.backoff.run(async () => {
+            for await (const result of this.sdk.trashNodes([entry.uid])) {
+                if (!result.ok) {
+                    throw result.error;
+                }
             }
-        }
+        });
         this.forget(entry);
     }
 
@@ -100,7 +104,7 @@ export class DriveTree {
         if (existing) {
             throw new DriveError(405, `${name} already exists`);
         }
-        const node = await this.sdk.createFolder(parent.uid, name);
+        const node = await this.backoff.run(() => this.sdk.createFolder(parent.uid, name));
         this.listings.delete(parent.uid);
         return toEntry(node as NodeEntity) as Entry;
     }
@@ -110,11 +114,13 @@ export class DriveTree {
         if (file.kind !== 'file') {
             throw new DriveError(405, `${file.name} is a folder`);
         }
-        return openDownload(this.sdk, file, {
-            range,
-            signal,
-            logger: this.logger,
-        });
+        return this.backoff.run(() =>
+            openDownload(this.sdk, file, {
+                range,
+                signal,
+                logger: this.logger,
+            }),
+        );
     }
 
     /**
@@ -143,12 +149,14 @@ export class DriveTree {
             expectedSize: options.size ?? null,
             ...(options.modified ? { modificationTime: options.modified } : {}),
         };
-        const uploader = existing
-            ? await this.sdk.getFileRevisionUploader(existing.uid, metadata, signal)
-            : await this.sdk.getFileUploader(parent.uid, name, metadata, signal);
-        const controller = await uploader.uploadFromStream(body, []);
-        const result = await controller.completion();
-        const node = await this.sdk.getNode(result.nodeUid);
+        const node = await this.backoff.run(async () => {
+            const uploader = existing
+                ? await this.sdk.getFileRevisionUploader(existing.uid, metadata, signal)
+                : await this.sdk.getFileUploader(parent.uid, name, metadata, signal);
+            const controller = await uploader.uploadFromStream(body, []);
+            const result = await controller.completion();
+            return await this.sdk.getNode(result.nodeUid);
+        });
         // The listing holds the old entry (or none); drop it so the next ask reloads the folder.
         this.listings.delete(parent.uid);
         return { entry: toEntry(node as NodeEntity) as Entry, created: !existing };
@@ -177,33 +185,38 @@ export class DriveTree {
         this.listings.delete(entry.uid);
     }
 
-    private async loadListing(folderUid: string): Promise<Listing> {
-        const uids: string[] = [];
-        for await (const uid of this.sdk.iterateFolderChildrenNodeUids(folderUid)) {
-            uids.push(uid);
-        }
-        const listing: Listing = new Map();
-        for await (const node of this.sdk.iterateNodes(uids)) {
-            if ('missingUid' in node) {
-                continue;
+    private loadListing(folderUid: string): Promise<Listing> {
+        return this.backoff.run(async () => {
+            const uids: string[] = [];
+            for await (const uid of this.sdk.iterateFolderChildrenNodeUids(folderUid)) {
+                uids.push(uid);
             }
-            const entry = toEntry(node);
-            if (isSkipped(entry)) {
-                if (entry.skipped !== 'trashed') {
-                    this.logger.warn(`Skipping node ${node.uid}: ${entry.skipped}`);
+            const listing: Listing = new Map();
+            for await (const node of this.sdk.iterateNodes(uids)) {
+                if ('missingUid' in node) {
+                    continue;
                 }
-                continue;
+                const entry = toEntry(node);
+                if (isSkipped(entry)) {
+                    if (entry.skipped !== 'trashed') {
+                        this.logger.warn(`Skipping node ${node.uid}: ${entry.skipped}`);
+                    }
+                    continue;
+                }
+                listing.set(entry.name, entry);
             }
-            listing.set(entry.name, entry);
-        }
-        return listing;
+            return listing;
+        });
     }
 
-    private async loadRoot(): Promise<Entry> {
-        const entry = toEntry(await this.sdk.getMyFilesRootFolder());
-        if (isSkipped(entry)) {
-            throw new Error(`Cannot serve the root of My files: ${entry.skipped}`);
-        }
-        return entry;
+    private loadRoot(): Promise<Entry> {
+        return this.backoff.run(async () => {
+            const entry = toEntry(await this.sdk.getMyFilesRootFolder());
+            if (isSkipped(entry)) {
+                throw new Error(`Cannot serve the root of My files: ${entry.skipped}`);
+            }
+            return entry;
+        });
     }
 }
+

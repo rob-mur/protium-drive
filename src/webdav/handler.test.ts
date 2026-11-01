@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 
+import { RateLimitedError } from '@protontech/drive-sdk';
+
+import { Backoff } from '../drive/backoff.ts';
 import { DriveError } from '../drive/errors.ts';
 import { DriveTree } from '../drive/tree.ts';
 import { createWebDavHandler, parseRange } from './handler.ts';
@@ -504,5 +507,25 @@ describe('MKCOL', () => {
         const response = await handle(new Request('http://127.0.0.1/Photos/beach.jpg/2025', { method: 'MKCOL' }));
         expect(response.status).toBe(409);
         expect(await response.text()).toContain('is not a folder');
+    });
+});
+
+describe('rate limit', () => {
+    test('a rate-limited call is 503 with Retry-After at the seconds left', async () => {
+        const backoff = new Backoff(() => 0);
+        backoff.note(new RateLimitedError('slow down'));
+        const tree = {
+            root: async () => ROOT,
+            list: async () => [],
+            stat: async () => {
+                throw new RateLimitedError('slow down');
+            },
+            backoff,
+        } as unknown as DriveTree;
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/Photos', { method: 'PROPFIND', headers: { Depth: '1' } }));
+        expect(response.status).toBe(503);
+        expect(response.headers.get('Retry-After')).toBe('30');
+        expect(await response.text()).toContain('rate limit');
     });
 });

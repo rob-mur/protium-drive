@@ -1,5 +1,6 @@
 import type { Logger } from '../vendor/proton-drive-sdk-account';
 
+import { Backoff } from './drive/backoff';
 import { DriveTree } from './drive/tree';
 import { acquireStateLock } from './session/lock';
 import { connect } from './proton/connect';
@@ -50,10 +51,11 @@ export async function serveCommand(options: ServeOptions): Promise<number> {
                 logger.warn(LOOPBACK_WARNING(host));
             }
             const sdk = await connection.createDriveClient();
+            const tree = new DriveTree(sdk, logger, new Backoff(connection.clock?.now.bind(connection.clock)));
             const server = startServer({
                 host,
                 port,
-                handler: createWebDavHandler({ tree: new DriveTree(sdk, logger), logger }),
+                handler: createWebDavHandler({ tree, logger }),
             });
             logger.info(`Serving Proton Drive My files at ${server.url.href}`);
             await waitUntil(signal);

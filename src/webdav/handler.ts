@@ -1,3 +1,5 @@
+import { RateLimitedError } from '@protontech/drive-sdk';
+
 import type { Logger } from '../../vendor/proton-drive-sdk-account';
 
 import type { ByteRange } from '../drive/download';
@@ -31,7 +33,7 @@ export function createWebDavHandler(options: HandlerOptions): WebDavHandler {
                 response = await route(request, parsePath(url.pathname));
             }
         } catch (error: unknown) {
-            response = errorResponse(error, logger, `${request.method} ${url.pathname}`);
+            response = errorResponse(error, tree, logger, `${request.method} ${url.pathname}`);
         }
         logger.info(
             `${request.method} ${url.pathname} -> ${response.status} (${Math.round(performance.now() - started)} ms)`,
@@ -213,7 +215,7 @@ function modifiedOf(request: Request): Date | undefined {
     return Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000) : undefined;
 }
 
-function errorResponse(error: unknown, logger: Logger, what: string): Response {
+function errorResponse(error: unknown, tree: DriveTree, logger: Logger, what: string): Response {
     if (error instanceof DriveError) {
         if (error.status >= 500) {
             logger.warn(`${what}: ${error.message}`);
@@ -223,6 +225,11 @@ function errorResponse(error: unknown, logger: Logger, what: string): Response {
             headers['Retry-After'] = String(error.retryAfterSeconds);
         }
         return text(error.status, error.message, headers);
+    }
+    if (error instanceof RateLimitedError) {
+        logger.warn(`${what}: Proton rate limit: ${error.message}`);
+        const retryAfter = Math.max(tree.backoff.coolingDownSeconds, 1);
+        return text(503, `Proton rate limit: ${error.message}`, { 'Retry-After': String(retryAfter) });
     }
     logger.error(`${what}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
     return text(500, error instanceof Error ? error.message : String(error));

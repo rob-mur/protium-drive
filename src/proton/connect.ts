@@ -18,6 +18,7 @@ import { createServerTimeAfterResponseHook } from '../../vendor/proton-drive-cli
 import { ApiClient, initAccount, type Logger } from '../../vendor/proton-drive-sdk-account';
 import type { Auth } from '../../vendor/proton-drive-sdk-account';
 import { startReceiveArm, type ReceiveArm } from '../../fake-drive/receive-arm.ts';
+import type { Clock } from '../../fake-drive/clock.ts';
 import { createTelemetry } from '../logger';
 import { APP_VERSION } from '../version';
 import { FileCredentials } from '../session/credentials';
@@ -40,6 +41,11 @@ export type Connection = {
     auth: Pick<Auth, 'isLoggedIn' | 'loadSession' | 'logout' | 'authViaWeb'>;
     credentials: FileCredentials;
     createDriveClient(): Promise<DriveSdk>;
+    /**
+     * The clock the product takes, under `--fake-drive`: the 429 back-off reads
+     * it so the scenarios can move time. `undefined` runs on the real clock.
+     */
+    clock?: Clock;
     stop(): Promise<void>;
 };
 
@@ -65,7 +71,13 @@ export async function connect(options: {
         try {
             options.onControlUrl?.(arm.controlUrl);
             const { auth } = await arm.account.initAccount({ authClientId: AUTH_CLIENT_ID, credentials, logger });
-            return { auth, credentials, createDriveClient: () => Promise.resolve(arm.client), stop: () => arm.stop() };
+            return {
+                auth,
+                credentials,
+                createDriveClient: () => Promise.resolve(arm.client),
+                clock: arm.clock,
+                stop: () => arm.stop(),
+            };
         } catch (error: unknown) {
             await arm.stop();
             throw error;
