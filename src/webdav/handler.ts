@@ -5,6 +5,7 @@ import type { Logger } from '../../vendor/proton-drive-sdk-account';
 import type { ByteRange } from '../drive/download';
 import { DriveError } from '../drive/errors';
 import type { DriveTree } from '../drive/tree';
+import { FailedPutGuard } from './guard';
 import { parsePath } from './paths';
 import { etagFor, multistatus } from './xml';
 
@@ -14,6 +15,8 @@ const ALLOW = 'OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL';
 export type HandlerOptions = {
     tree: DriveTree;
     logger: Logger;
+    /** The failed-overwrite guard; a fresh one when omitted. */
+    guard?: FailedPutGuard;
 };
 
 export type WebDavHandler = (request: Request) => Promise<Response>;
@@ -21,6 +24,7 @@ export type WebDavHandler = (request: Request) => Promise<Response>;
 /** Maps WebDAV requests to `DriveTree` calls. */
 export function createWebDavHandler(options: HandlerOptions): WebDavHandler {
     const { tree, logger } = options;
+    const guard = options.guard ?? new FailedPutGuard();
 
     return async (request) => {
         const started = performance.now();
@@ -119,22 +123,42 @@ export function createWebDavHandler(options: HandlerOptions): WebDavHandler {
                     : `PUT declared ${contentLength} bytes but has no body`,
             );
         }
-        const { created } = await tree.upload(
-            segments.slice(0, -1),
-            segments[segments.length - 1],
-            request.body ?? emptyStream(),
-            {
-                size,
-                mediaType: mediaTypeOf(request),
-                modified: modifiedOf(request),
-            },
-            request.signal,
-        );
-        return new Response(null, { status: created ? 201 : 204 });
+        const path = segments.join('/');
+        const existing = await tree.stat(segments);
+        try {
+            const { created } = await tree.upload(
+                segments.slice(0, -1),
+                segments[segments.length - 1],
+                request.body ?? emptyStream(),
+                {
+                    size,
+                    mediaType: mediaTypeOf(request),
+                    modified: modifiedOf(request),
+                },
+                request.signal,
+            );
+            guard.release(path);
+            return new Response(null, { status: created ? 201 : 204 });
+        } catch (error: unknown) {
+            if (existing?.kind === 'file') {
+                // The old revision is still on Proton, and the client (rclone) will
+                // DELETE the very same path to undo its failed PUT. Refuse that.
+                guard.protect(path);
+                logger.warn(`PUT /${path} failed on an existing file; DELETE of it is refused for a while`);
+            }
+            throw error;
+        }
     }
 
     /** Trashes the file or folder, so the client sees 204 once Drive has it. */
     async function remove(segments: string[]): Promise<Response> {
+        const path = segments.join('/');
+        if (guard.isProtected(path)) {
+            return text(
+                423,
+                `/${path} is protected after a failed overwrite, so its old content stays; try the DELETE again in a minute`,
+            );
+        }
         await tree.trash(segments);
         return new Response(null, { status: 204 });
     }

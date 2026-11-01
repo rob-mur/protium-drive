@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { authLogin } from './auth/login.ts';
 import { createLogger } from './logger.ts';
 import { serveCommand, NOT_SIGNED_IN, LOOPBACK_WARNING } from './serve.ts';
-import { startReceiveArm } from '../fake-drive/receive-arm.ts';
+import { CONTROL_LINE, startReceiveArm } from '../fake-drive/receive-arm.ts';
 
 const DIRS: string[] = [];
 const QUIET = createLogger({ PDM_LOG_LEVEL: 'error' });
@@ -318,7 +318,73 @@ describe('serveCommand', () => {
         expect(String(secondError)).toContain(`pid ${process.pid}`);
         expect(String(secondError)).toContain(stateDir);
     });
+
+    test('a failed overwrite refuses the DELETE for 60 s on the Drive clock, then frees it', async () => {
+        const stateDir = scratch('state');
+        const driveDir = scratch('drive');
+        await seedDrive(driveDir, [{ path: '/Photos/beach.jpg', type: 'file', contentBase64: btoa('sand and sea') }]);
+        await signIn(stateDir, driveDir);
+        const abort = new AbortController();
+        const infos: string[] = [];
+        const logger = { ...QUIET, info: (line: string) => infos.push(line) };
+        const controlSeen = captureControlUrl();
+        const serving = serveCommand({ stateDir, host: '127.0.0.1', port: 0, logger, fakeDriveDir: driveDir, signal: abort.signal });
+        const url = (await waitFor(infos, 'Serving Proton Drive'))!.match(/https?:\/\/\S+/)![0];
+        const control = await controlSeen;
+
+        // The Drive fails the next upload of the file part-way, as a scenario does.
+        await fetch(new URL('faults', control), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kind: 'upload-part-way', operation: 'getFileRevisionUploader', path: 'Photos/beach.jpg' }),
+        });
+        const failed = await fetch(new URL('Photos/beach.jpg', url), {
+            method: 'PUT',
+            headers: { 'Content-Length': '13' },
+            body: 'sand and snow',
+        });
+        expect(failed.ok).toBe(false);
+
+        const refused = await fetch(new URL('Photos/beach.jpg', url), { method: 'DELETE' });
+        expect(refused.status).toBe(423);
+        const kept = await fetch(new URL('Photos/beach.jpg', url), { method: 'GET' });
+        expect(await kept.text()).toBe('sand and sea');
+
+        await fetch(new URL('clock/advance', control), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ seconds: 61 }),
+        });
+        const freed = await fetch(new URL('Photos/beach.jpg', url), { method: 'DELETE' });
+        expect(freed.status).toBe(204);
+        const trash = (await (await fetch(new URL('trash', control))).json()) as { name: string }[];
+        abort.abort();
+        expect(await serving).toBe(0);
+
+        expect(trash.map((node) => node.name)).toContain('beach.jpg');
+    });
 });
+
+/**
+ * Captures the fake-drive control channel's URL line from stderr: the serve's
+ * Receive arm prints it straight to the process stderr, which the tests do not
+ * otherwise see.
+ */
+function captureControlUrl(): Promise<URL> {
+    return new Promise((resolve) => {
+        const original = process.stderr.write.bind(process.stderr);
+        let captured = '';
+        process.stderr.write = ((chunk: Uint8Array | string, ...rest: unknown[]) => {
+            captured += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
+            const match = CONTROL_LINE.exec(captured);
+            if (match) {
+                process.stderr.write = original;
+                resolve(new URL(match[1]!));
+            }
+            return true;
+        }) as typeof process.stderr.write;
+    });
+}
 
 /** The node named `name` in the fake drive's persisted state, for looking at it from the outside. */
 function driveNode(driveDir: string, name: string): { revisions: { blob: string; declaredSize: number | null; mediaType: string }[] } {

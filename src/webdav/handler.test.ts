@@ -6,6 +6,7 @@ import { Backoff } from '../drive/backoff.ts';
 import { DriveError } from '../drive/errors.ts';
 import { DriveTree } from '../drive/tree.ts';
 import { createWebDavHandler, parseRange } from './handler.ts';
+import { FailedPutGuard } from './guard.ts';
 import type { Entry } from '../drive/entry.ts';
 import type { ByteRange } from '../drive/download.ts';
 
@@ -434,6 +435,78 @@ describe('DELETE', () => {
         const response = await handle(new Request('http://127.0.0.1/Photos/missing.jpg', { method: 'DELETE' }));
         expect(response.status).toBe(404);
         expect(await response.text()).toContain('/Photos/missing.jpg not found');
+    });
+
+    test('DELETE within the window after a failed overwrite is 423, and nothing reaches the Drive', async () => {
+        const beach = fileEntry('beach.jpg', 12);
+        const tree = treeWithTrashes({ 'Photos/beach.jpg': beach });
+        tree.upload = async () => {
+            throw new Error('upload part-way failure');
+        };
+        const guard = new FailedPutGuard(60_000, () => 0);
+        const warnings: string[] = [];
+        const handle = createWebDavHandler({ tree, logger: { ...QUIET, warn: (line: string) => warnings.push(line) }, guard });
+        await handle(
+            new Request('http://127.0.0.1/Photos/beach.jpg', { method: 'PUT', headers: { 'Content-Length': '12' }, body: 'sand and snow' }),
+        );
+        const response = await handle(new Request('http://127.0.0.1/Photos/beach.jpg', { method: 'DELETE' }));
+        expect(response.status).toBe(423);
+        expect(await response.text()).toContain('protected after a failed overwrite');
+        expect(tree.trashed).toEqual([]);
+        expect(warnings.join('\n')).toContain('refused for a while');
+    });
+
+    test('DELETE after the guard window passes trashes the file', async () => {
+        const tree = treeWithTrashes({ 'Photos/beach.jpg': fileEntry('beach.jpg', 12) });
+        tree.upload = async () => {
+            throw new Error('upload part-way failure');
+        };
+        let now = 0;
+        const guard = new FailedPutGuard(60_000, () => now);
+        const handle = createWebDavHandler({ tree, logger: QUIET, guard });
+        await handle(
+            new Request('http://127.0.0.1/Photos/beach.jpg', { method: 'PUT', headers: { 'Content-Length': '12' }, body: 'sand and snow' }),
+        );
+        now = 61_000;
+        const response = await handle(new Request('http://127.0.0.1/Photos/beach.jpg', { method: 'DELETE' }));
+        expect(response.status).toBe(204);
+        expect(tree.trashed).toEqual(['Photos/beach.jpg']);
+    });
+
+    test('a successful PUT after a failed one lifts the guard at once', async () => {
+        const tree = treeWithTrashes({ 'Photos/beach.jpg': fileEntry('beach.jpg', 12) });
+        let fail = true;
+        tree.upload = async () => {
+            if (fail) throw new Error('upload part-way failure');
+            return { entry: fileEntry('beach.jpg', 13), created: false };
+        };
+        const guard = new FailedPutGuard(60_000, () => 0);
+        const handle = createWebDavHandler({ tree, logger: QUIET, guard });
+        await handle(
+            new Request('http://127.0.0.1/Photos/beach.jpg', { method: 'PUT', headers: { 'Content-Length': '13' }, body: 'sand and snow' }),
+        );
+        fail = false;
+        const good = await handle(
+            new Request('http://127.0.0.1/Photos/beach.jpg', { method: 'PUT', headers: { 'Content-Length': '13' }, body: 'sand and sun' }),
+        );
+        expect(good.status).toBe(204);
+        const response = await handle(new Request('http://127.0.0.1/Photos/beach.jpg', { method: 'DELETE' }));
+        expect(response.status).toBe(204);
+        expect(tree.trashed).toEqual(['Photos/beach.jpg']);
+    });
+
+    test('a failed PUT of a new name does not guard the DELETE of that name', async () => {
+        const tree = treeWithTrashes({});
+        tree.upload = async () => {
+            throw new Error('upload part-way failure');
+        };
+        const guard = new FailedPutGuard(60_000, () => 0);
+        const handle = createWebDavHandler({ tree, logger: QUIET, guard });
+        await handle(
+            new Request('http://127.0.0.1/Photos/new.jpg', { method: 'PUT', headers: { 'Content-Length': '3' }, body: 'abc' }),
+        );
+        const response = await handle(new Request('http://127.0.0.1/Photos/new.jpg', { method: 'DELETE' }));
+        expect(response.status).toBe(404);
     });
 });
 

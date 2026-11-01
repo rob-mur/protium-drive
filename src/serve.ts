@@ -5,6 +5,7 @@ import { DriveTree } from './drive/tree';
 import { acquireStateLock } from './session/lock';
 import { connect } from './proton/connect';
 import { createWebDavHandler } from './webdav/handler';
+import { FailedPutGuard, FAILED_PUT_GUARD_MS } from './webdav/guard';
 import { parsePath } from './webdav/paths';
 import { startServer, type RunningServer } from './webdav/server';
 
@@ -60,7 +61,7 @@ export async function serveCommand(options: ServeOptions): Promise<number> {
             const server = startServer({
                 host,
                 port,
-                handler: createWebDavHandler({ tree, logger }),
+                handler: createWebDavHandler({ tree, logger, guard: new FailedPutGuard(FAILED_PUT_GUARD_MS, connection.clock?.now.bind(connection.clock)) }),
             });
             logger.info(`Serving Proton Drive ${options.root ? `folder /${options.root}` : 'My files'} at ${server.url.href}`);
             await waitUntil(signal);
