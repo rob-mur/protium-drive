@@ -473,3 +473,86 @@ describe('DriveTree listing cache', () => {
         expect(sdk.calls.get('iterateFolderChildrenNodeUids')).toBe(listedBefore! + 1);
     });
 });
+
+describe('DriveTree createFolder', () => {
+    /** The SDK surface for folder creation, recording every call and its parent. */
+    function fakeFolderSdk(nodes: Map<string, Node>) {
+        const base = fakeSdk(nodes);
+        const created: { parentUid: string; name: string }[] = [];
+        const made = new Map<string, Node>();
+        return {
+            ...base,
+            created,
+            made,
+            createFolder: async (parent: NodeOrUid, name: string) => {
+                base.calls.set('createFolder', (base.calls.get('createFolder') ?? 0) + 1);
+                const parentUid = typeof parent === 'string' ? parent : parent.uid;
+                created.push({ parentUid, name });
+                const uid = `new-${name}`;
+                const node = folder(uid, name, parentUid);
+                made.set(uid, node);
+                // The made folder exists for the next listing too, as Drive would show it.
+                nodes.set(uid, node);
+                return structuredClone(node);
+            },
+            // The made folders exist for the next listing too, as Drive would show them.
+            iterateFolderChildrenNodeUids: async function* (parent: NodeOrUid) {
+                const uid = typeof parent === 'string' ? parent : parent.uid;
+                for (const node of nodes.values()) {
+                    if (node.parentUid === uid) {
+                        yield node.uid;
+                    }
+                }
+            },
+        } as unknown as DriveSdk & { created: { parentUid: string; name: string }[] };
+    }
+
+    test('creating a folder calls Drive with the parent UID and shows up in the next listing', async () => {
+        const nodes = new Map([[ 'root', folder('root', 'My files') ]]);
+        const tree = new DriveTree(fakeFolderSdk(nodes) as never, QUIET);
+        const entry = await tree.createFolder([], 'Photos');
+        expect(entry).toMatchObject({ name: 'Photos', kind: 'folder', uid: 'new-Photos' });
+        const names = (await tree.list(await tree.root())).map((child) => child.name);
+        expect(names).toEqual(['Photos']);
+    });
+
+    test('creating a folder in a subfolder hands the subfolder UID to Drive', async () => {
+        const nodes = new Map([
+            [ 'root', folder('root', 'My files') ],
+            [ 'photos', folder('photos', 'Photos', 'root') ],
+        ]);
+        const tree = new DriveTree(fakeFolderSdk(nodes) as never, QUIET);
+        const entry = await tree.createFolder(['Photos'], '2025');
+        expect(entry).toMatchObject({ uid: 'new-2025', parentUid: 'photos' });
+    });
+
+    test('an existing name of any kind is a 405, and Drive is never asked', async () => {
+        const nodes = new Map([
+            [ 'root', folder('root', 'My files') ],
+            [ 'photos', folder('photos', 'Photos', 'root') ],
+        ]);
+        const sdk = fakeFolderSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+        expect(tree.createFolder([], 'Photos')).rejects.toMatchObject({ status: 405 });
+        expect(sdk.created).toEqual([]);
+    });
+
+    test('creating under a path that is not a folder is a 409', async () => {
+        const nodes = new Map([
+            [ 'root', folder('root', 'My files') ],
+            [ 'beach', file('beach', 'beach.jpg', 'root') ],
+        ]);
+        const sdk = fakeFolderSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+        expect(tree.createFolder(['beach.jpg'], '2025')).rejects.toMatchObject({ status: 409 });
+        expect(sdk.created).toEqual([]);
+    });
+
+    test('creating under a path that does not exist is a 409', async () => {
+        const nodes = new Map([[ 'root', folder('root', 'My files') ]]);
+        const sdk = fakeFolderSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+        expect(tree.createFolder(['Nope'], '2025')).rejects.toMatchObject({ status: 409 });
+        expect(sdk.created).toEqual([]);
+    });
+});

@@ -86,6 +86,25 @@ export class DriveTree {
         this.forget(entry);
     }
 
+    /**
+     * Creates a folder under `parentSegments`. An existing name of any kind is
+     * a 405; the parent's cached listing is dropped, so the next ask shows
+     * the new folder.
+     */
+    async createFolder(parentSegments: string[], name: string): Promise<Entry> {
+        const parent = await this.stat(parentSegments);
+        if (!parent || parent.kind !== 'folder') {
+            throw new DriveError(409, `/${parentSegments.join('/')} is not a folder`);
+        }
+        const existing = (await this.listing(parent.uid)).get(name);
+        if (existing) {
+            throw new DriveError(405, `${name} already exists`);
+        }
+        const node = await this.sdk.createFolder(parent.uid, name);
+        this.listings.delete(parent.uid);
+        return toEntry(node as NodeEntity) as Entry;
+    }
+
     /** Streams a file. `signal` is the client's request; when it aborts, the download stops. */
     async read(file: Entry, range?: ByteRange, signal?: AbortSignal): Promise<ReadableStream<Uint8Array>> {
         if (file.kind !== 'file') {

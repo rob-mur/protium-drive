@@ -85,7 +85,7 @@ describe('createWebDavHandler', () => {
         const response = await handle(new Request('http://127.0.0.1/', { method: 'OPTIONS' }));
         expect(response.status).toBe(200);
         expect(response.headers.get('DAV')).toBe('1');
-        expect(response.headers.get('Allow')).toBe('OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE');
+        expect(response.headers.get('Allow')).toBe('OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL');
         expect(response.headers.get('MS-Author-Via')).toBe('DAV');
     });
 
@@ -121,9 +121,9 @@ describe('createWebDavHandler', () => {
 
     test('a method the serve does not answer yet is 405, naming what it does answer', async () => {
         const { handle } = handler();
-        const response = await handle(new Request('http://127.0.0.1/', { method: 'MKCOL' }));
+        const response = await handle(new Request('http://127.0.0.1/', { method: 'MOVE' }));
         expect(response.status).toBe(405);
-        expect(response.headers.get('Allow')).toBe('OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE');
+        expect(response.headers.get('Allow')).toBe('OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL');
     });
 
     test('a bad path segment is 400, and an unexpected error is 500', async () => {
@@ -431,5 +431,78 @@ describe('DELETE', () => {
         const response = await handle(new Request('http://127.0.0.1/Photos/missing.jpg', { method: 'DELETE' }));
         expect(response.status).toBe(404);
         expect(await response.text()).toContain('/Photos/missing.jpg not found');
+    });
+});
+
+describe('MKCOL', () => {
+    /** A tree that records every createFolder call, refusing what the entries list holds. */
+    function treeWithFolders(existing: Record<string, Entry>, refused: string[] = []) {
+        const created: string[] = [];
+        const tree = {
+            root: async () => ROOT,
+            list: async () => [],
+            stat: async (segments: string[]) => existing[segments.join('/')],
+            createFolder: async (parentSegments: string[], name: string) => {
+                const parent = parentSegments.join('/');
+                if (refused.includes(parent)) {
+                    throw new DriveError(409, `/${parent} is not a folder`);
+                }
+                const path = parent ? `${parent}/${name}` : name;
+                if (existing[path]) {
+                    throw new DriveError(405, `${name} already exists`);
+                }
+                created.push(path);
+                return { uid: `uid-${name}`, name, kind: 'folder' } as Entry;
+            },
+        } as unknown as DriveTree & { created: string[] };
+        tree.created = created;
+        return tree as unknown as DriveTree & { created: string[] };
+    }
+
+    test('MKCOL under an existing folder creates it and answers 201 with no body', async () => {
+        const tree = treeWithFolders({ Photos: { uid: 'photos', name: 'Photos', kind: 'folder' } as Entry });
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/Photos/2025', { method: 'MKCOL' }));
+        expect(response.status).toBe(201);
+        expect((await response.arrayBuffer()).byteLength).toBe(0);
+        expect(tree.created).toEqual(['Photos/2025']);
+    });
+
+    test('MKCOL of a name that already exists is 405, and nothing is created', async () => {
+        const tree = treeWithFolders({
+            Photos: { uid: 'photos', name: 'Photos', kind: 'folder' } as Entry,
+            'Photos/2025': fileEntry('2025', 1),
+        });
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/Photos/2025', { method: 'MKCOL' }));
+        expect(response.status).toBe(405);
+        expect(await response.text()).toContain('already exists');
+        expect(tree.created).toEqual([]);
+    });
+
+    test('MKCOL with a body is 415, and nothing is created', async () => {
+        const tree = treeWithFolders({});
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/Photos', { method: 'MKCOL', body: 'noise' }));
+        expect(response.status).toBe(415);
+        expect(await response.text()).toContain('MKCOL carries a body');
+        expect(tree.created).toEqual([]);
+    });
+
+    test('MKCOL on the root is 405, and nothing is created', async () => {
+        const tree = treeWithFolders({});
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/', { method: 'MKCOL' }));
+        expect(response.status).toBe(405);
+        expect(await response.text()).toContain('root folder already exists');
+        expect(tree.created).toEqual([]);
+    });
+
+    test('MKCOL under a path that is not a folder is 409', async () => {
+        const tree = treeWithFolders({ 'Photos/beach.jpg': fileEntry('beach.jpg', 12) }, ['Photos/beach.jpg']);
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/Photos/beach.jpg/2025', { method: 'MKCOL' }));
+        expect(response.status).toBe(409);
+        expect(await response.text()).toContain('is not a folder');
     });
 });
