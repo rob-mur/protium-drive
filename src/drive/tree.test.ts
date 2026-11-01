@@ -90,6 +90,105 @@ describe('DriveTree', () => {
     });
 });
 
+describe('DriveTree trash', () => {
+    /** The SDK surface for trashing, recording every call and what it could carry. */
+    function fakeTrashSdk(nodes: Map<string, Node>) {
+        const base = fakeSdk(nodes);
+        const trashed: { uid: string }[] = [];
+        let fail: Error | undefined;
+        return {
+            ...base,
+            trashed,
+            setFailure: (error: Error) => {
+                fail = error;
+            },
+            trashNodes: async function* (uids: NodeOrUid[]) {
+                base.calls.set('trashNodes', (base.calls.get('trashNodes') ?? 0) + 1);
+                for (const nodeOrUid of uids) {
+                    const uid = typeof nodeOrUid === 'string' ? nodeOrUid : nodeOrUid.uid;
+                    if (fail) {
+                        yield { uid, ok: false, error: fail };
+                        return;
+                    }
+                    trashed.push({ uid });
+                    const node = nodes.get(uid)!;
+                    node.trashTime = new Date('2026-02-03T00:00:00Z');
+                }
+            },
+        } as unknown as DriveSdk & typeof base & { trashed: { uid: string }[]; setFailure: (error: Error) => void };
+    }
+
+    test('trashing a file hands its UID to Drive and the cached listing forgets it at once', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+            ['beach', file('beach', 'beach.jpg', 'photos')],
+        ]);
+        const sdk = fakeTrashSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+        // Warm the cache so the test proves the forget, not a fresh load.
+        expect((await tree.stat(['Photos', 'beach.jpg']))?.uid).toBe('beach');
+        const listed = sdk.calls.get('iterateFolderChildrenNodeUids') ?? 0;
+
+        await tree.trash(['Photos', 'beach.jpg']);
+
+        expect(sdk.trashed).toEqual([{ uid: 'beach' }]);
+        expect(await tree.stat(['Photos', 'beach.jpg'])).toBeUndefined();
+        expect(await tree.list((await tree.stat(['Photos']))!)).toEqual([]);
+        // The listing was reloaded exactly once, from Drive, after the trash.
+        expect(sdk.calls.get('iterateFolderChildrenNodeUids')).toBe(listed + 1);
+    });
+
+    test('trashing a folder forgets the folder and its parent, and Drive holds nothing under it', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+            ['album', folder('album', 'album', 'photos')],
+            ['beach', file('beach', 'beach.jpg', 'album')],
+        ]);
+        const sdk = fakeTrashSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+        expect((await tree.stat(['Photos', 'album', 'beach.jpg']))?.uid).toBe('beach');
+
+        await tree.trash(['Photos', 'album']);
+
+        expect(sdk.trashed).toEqual([{ uid: 'album' }]);
+        expect(await tree.stat(['Photos', 'album'])).toBeUndefined();
+    });
+
+    test('trashing the root is refused', async () => {
+        const nodes = new Map([[ 'root', folder('root', 'My files') ]]);
+        const sdk = fakeTrashSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+        await expect(tree.trash([])).rejects.toThrow('The root folder cannot be deleted');
+        expect(sdk.trashed).toEqual([]);
+    });
+
+    test('a path that does not exist is not found', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+        ]);
+        const sdk = fakeTrashSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+        await expect(tree.trash(['Photos', 'missing.jpg'])).rejects.toThrow('/Photos/missing.jpg not found');
+        expect(sdk.trashed).toEqual([]);
+    });
+
+    test('a node Drive fails to trash surfaces its error', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+            ['beach', file('beach', 'beach.jpg', 'photos')],
+        ]);
+        const sdk = fakeTrashSdk(nodes);
+        sdk.setFailure(new Error('Drive refused'));
+        const tree = new DriveTree(sdk as never, QUIET);
+        await expect(tree.trash(['Photos', 'beach.jpg'])).rejects.toThrow('Drive refused');
+        expect(sdk.trashed).toEqual([]);
+    });
+});
+
 describe('DriveTree upload', () => {
     const body = () =>
         new ReadableStream<Uint8Array>({

@@ -7,7 +7,7 @@ import { parsePath } from './paths';
 import { etagFor, multistatus } from './xml';
 
 /** The methods this serve answers; the other capabilities grow this as they land. */
-const ALLOW = 'OPTIONS, PROPFIND, GET, HEAD, PUT';
+const ALLOW = 'OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE';
 
 export type HandlerOptions = {
     tree: DriveTree;
@@ -48,6 +48,8 @@ export function createWebDavHandler(options: HandlerOptions): WebDavHandler {
                 return get(request, segments);
             case 'PUT':
                 return put(request, segments);
+            case 'DELETE':
+                return remove(segments);
             default:
                 return new Response(`${request.method} is not supported\n`, { status: 405, headers: { Allow: ALLOW } });
         }
@@ -125,6 +127,12 @@ export function createWebDavHandler(options: HandlerOptions): WebDavHandler {
             request.signal,
         );
         return new Response(null, { status: created ? 201 : 204 });
+    }
+
+    /** Trashes the file or folder, so the client sees 204 once Drive has it. */
+    async function remove(segments: string[]): Promise<Response> {
+        await tree.trash(segments);
+        return new Response(null, { status: 204 });
     }
 
     async function requireEntry(segments: string[]): Promise<NonNullable<Awaited<ReturnType<typeof tree.stat>>>> {

@@ -65,6 +65,27 @@ export class DriveTree {
         return [...(await this.listing(folder.uid)).values()];
     }
 
+    /**
+     * Moves a file or folder to Drive's trash, so its content stays
+     * recoverable in the Drive UI. The parent's cached listing is dropped at
+     * once, so the next ask no longer shows the trashed name.
+     */
+    async trash(segments: string[]): Promise<void> {
+        if (segments.length === 0) {
+            throw new DriveError(403, 'The root folder cannot be deleted');
+        }
+        const entry = await this.stat(segments);
+        if (!entry) {
+            throw new DriveError(404, `/${segments.join('/')} not found`);
+        }
+        for await (const result of this.sdk.trashNodes([entry.uid])) {
+            if (!result.ok) {
+                throw result.error;
+            }
+        }
+        this.forget(entry);
+    }
+
     /** Streams a file. `signal` is the client's request; when it aborts, the download stops. */
     async read(file: Entry, range?: ByteRange, signal?: AbortSignal): Promise<ReadableStream<Uint8Array>> {
         if (file.kind !== 'file') {
@@ -127,6 +148,14 @@ export class DriveTree {
             });
         }
         return pending;
+    }
+
+    /** Forgets the cached views a trashed entry takes part in: its own folder, and its parent's. */
+    private forget(entry: Entry): void {
+        if (entry.parentUid) {
+            this.listings.delete(entry.parentUid);
+        }
+        this.listings.delete(entry.uid);
     }
 
     private async loadListing(folderUid: string): Promise<Listing> {

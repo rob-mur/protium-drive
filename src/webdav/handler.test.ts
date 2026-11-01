@@ -85,7 +85,7 @@ describe('createWebDavHandler', () => {
         const response = await handle(new Request('http://127.0.0.1/', { method: 'OPTIONS' }));
         expect(response.status).toBe(200);
         expect(response.headers.get('DAV')).toBe('1');
-        expect(response.headers.get('Allow')).toBe('OPTIONS, PROPFIND, GET, HEAD, PUT');
+        expect(response.headers.get('Allow')).toBe('OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE');
         expect(response.headers.get('MS-Author-Via')).toBe('DAV');
     });
 
@@ -123,7 +123,7 @@ describe('createWebDavHandler', () => {
         const { handle } = handler();
         const response = await handle(new Request('http://127.0.0.1/', { method: 'MKCOL' }));
         expect(response.status).toBe(405);
-        expect(response.headers.get('Allow')).toBe('OPTIONS, PROPFIND, GET, HEAD, PUT');
+        expect(response.headers.get('Allow')).toBe('OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE');
     });
 
     test('a bad path segment is 400, and an unexpected error is 500', async () => {
@@ -381,5 +381,55 @@ describe('parseRange', () => {
         expect(parseRange('bytes=5-4', 100)).toBe('unsatisfiable');
         expect(parseRange('bytes=-0', 100)).toBe('unsatisfiable');
         expect(parseRange('bytes=0-', 0)).toBe('unsatisfiable');
+    });
+});
+
+describe('DELETE', () => {
+    /** A tree that records every trash call, refusing what the entries list holds. */
+    function treeWithTrashes(existing: Record<string, Entry>, refused: string[] = []) {
+        const trashed: string[] = [];
+        const tree = {
+            root: async () => ROOT,
+            list: async () => [],
+            stat: async (segments: string[]) => existing[segments.join('/')],
+            trash: async (segments: string[]) => {
+                const path = segments.join('/');
+                if (refused.includes(path)) {
+                    throw new DriveError(403, 'The root folder cannot be deleted');
+                }
+                if (!existing[path]) {
+                    throw new DriveError(404, `/${path} not found`);
+                }
+                trashed.push(path);
+            },
+        } as unknown as DriveTree & { trashed: string[] };
+        tree.trashed = trashed;
+        return tree as unknown as DriveTree & { trashed: string[] };
+    }
+
+    test('DELETE on a file trashes it and answers 204 with no body', async () => {
+        const tree = treeWithTrashes({ 'Photos/beach.jpg': fileEntry('beach.jpg', 12) });
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/Photos/beach.jpg', { method: 'DELETE' }));
+        expect(response.status).toBe(204);
+        expect((await response.arrayBuffer()).byteLength).toBe(0);
+        expect(tree.trashed).toEqual(['Photos/beach.jpg']);
+    });
+
+    test('DELETE on the root is 403, and nothing reaches the Drive', async () => {
+        const tree = treeWithTrashes({}, ['']);
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/', { method: 'DELETE' }));
+        expect(response.status).toBe(403);
+        expect(await response.text()).toContain('The root folder cannot be deleted');
+        expect(tree.trashed).toEqual([]);
+    });
+
+    test('DELETE on a missing path is 404', async () => {
+        const tree = treeWithTrashes({});
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/Photos/missing.jpg', { method: 'DELETE' }));
+        expect(response.status).toBe(404);
+        expect(await response.text()).toContain('/Photos/missing.jpg not found');
     });
 });
