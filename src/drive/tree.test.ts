@@ -90,6 +90,149 @@ describe('DriveTree', () => {
     });
 });
 
+describe('DriveTree upload', () => {
+    const body = () =>
+        new ReadableStream<Uint8Array>({
+            start(controller) {
+                controller.enqueue(new TextEncoder().encode('sand and sea'));
+                controller.close();
+            },
+        });
+
+    /** The SDK surface for uploads, recording the metadata each call carried and their order. */
+    function fakeUploadSdk(nodes: Map<string, Node>) {
+        const base = fakeSdk(nodes);
+        const order: string[] = [];
+        const uploads: { where: string; metadata: unknown }[] = [];
+        const made = new Map<string, Node>();
+        const uploader = (where: string) => ({
+            uploadFromStream: async (stream: ReadableStream<Uint8Array>) => {
+                order.push(`upload:${where}`);
+                const content = new Uint8Array(await new Response(stream).arrayBuffer());
+                const node = structuredClone(
+                    [...made.values()].find((n) => n.uid === where) ?? ({} as Node),
+                );
+                return {
+                    pause() {},
+                    resume() {},
+                    completion: async () => {
+                        order.push(`completed:${where}`);
+                        return { nodeUid: node.uid ?? where, nodeRevisionUid: `${node.uid ?? where}-rev2` };
+                    },
+                    // Exposed for the tests: what the stream carried.
+                    content,
+                };
+            },
+        });
+        return {
+            ...base,
+            order,
+            uploads,
+            made,
+            getFileUploader: async (parent: NodeOrUid, name: string, metadata: { expectedSize?: number | null }) => {
+                order.push('getFileUploader');
+                uploads.push({ where: `create in ${typeof parent === 'string' ? parent : parent.uid} as ${name}`, metadata });
+                const uid = `new-${name}`;
+                made.set(uid, file(uid, name, typeof parent === 'string' ? parent : parent.uid));
+                return uploader(uid);
+            },
+            getFileRevisionUploader: async (uid: NodeOrUid, metadata: { expectedSize?: number | null }) => {
+                order.push('getFileRevisionUploader');
+                const nodeUid = typeof uid === 'string' ? uid : uid.uid;
+                uploads.push({ where: `revise ${nodeUid}`, metadata });
+                return uploader(nodeUid);
+            },
+            getNode: async (uid: NodeOrUid) => {
+                order.push('getNode');
+                const key = typeof uid === 'string' ? uid : uid.uid;
+                return made.get(key) ?? nodes.get(key)!;
+            },
+            // The made nodes exist for the next listing too, as Drive would show them.
+            iterateFolderChildrenNodeUids: async function* (parent: NodeOrUid) {
+                const pid = typeof parent === 'string' ? parent : parent.uid;
+                for await (const uid of base.iterateFolderChildrenNodeUids(pid)) {
+                    yield uid;
+                }
+                for (const node of made.values()) {
+                    if (node.parentUid === pid) {
+                        yield node.uid;
+                    }
+                }
+            },
+            iterateNodes: async function* (uids: NodeOrUid[]) {
+                for (const uid of uids) {
+                    const key = typeof uid === 'string' ? uid : uid.uid;
+                    yield made.get(key) ?? nodes.get(key) as MaybeMissingNode;
+                }
+            },
+        } as unknown as DriveSdk & typeof base & { order: string[]; uploads: typeof uploads; made: Map<string, Node> };
+    }
+
+    test('a new name creates a file with the metadata the request declared', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+        ]);
+        const sdk = fakeUploadSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+        const photos = (await tree.stat(['Photos']))!;
+        const { entry, created } = await tree.upload(['Photos'], 'beach.jpg', body(), {
+            size: 12,
+            mediaType: 'image/jpeg',
+        });
+        expect(created).toBe(true);
+        expect(entry).toMatchObject({ uid: 'new-beach.jpg', name: 'beach.jpg', kind: 'file' });
+        expect(sdk.order[0]).toBe('getFileUploader');
+        expect(sdk.uploads[0]).toEqual({
+            where: 'create in photos as beach.jpg',
+            metadata: { expectedSize: 12, mediaType: 'image/jpeg' },
+        });
+    });
+
+    test('an existing file gets a revision uploader instead', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+            ['beach', file('beach', 'beach.jpg', 'photos')],
+        ]);
+        const sdk = fakeUploadSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+        const { created } = await tree.upload(['Photos'], 'beach.jpg', body(), {
+            size: 12,
+            mediaType: 'image/jpeg',
+        });
+        expect(created).toBe(false);
+        expect(sdk.order[0]).toBe('getFileRevisionUploader');
+        expect(sdk.uploads[0]?.metadata).toEqual({ expectedSize: 12, mediaType: 'image/jpeg' });
+    });
+
+    test('uploading into a name that is a folder is refused', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+            ['album', folder('album', 'album', 'photos')],
+        ]);
+        const sdk = fakeUploadSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+        await expect(tree.upload(['Photos'], 'album', body(), { size: 12, mediaType: 'image/jpeg' })).rejects.toThrow(
+            'album is a folder',
+        );
+    });
+
+    test('a listing that held the file before the upload shows it after', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+        ]);
+        const sdk = fakeUploadSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+        const photos = (await tree.stat(['Photos']))!;
+        expect(await tree.list(photos)).toEqual([]);
+        await tree.upload(['Photos'], 'beach.jpg', body(), { size: 12, mediaType: 'image/jpeg' });
+        expect((await tree.stat(['Photos', 'beach.jpg']))?.uid).toBe('new-beach.jpg');
+    });
+});
+
 describe('DriveTree listing cache', () => {
     test('a folder is listed once, however many clients ask', async () => {
         const nodes = new Map([

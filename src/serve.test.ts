@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rm as rmAsync } from 'node:fs/promises';
@@ -25,8 +25,8 @@ afterEach(async () => {
     }
 });
 
-/** Signs in against the fake drive, as the user approves the sign-in in a browser. */
-async function signIn(stateDir: string, driveDir: string): Promise<void> {
+/** Signs in against the fake drive, as the user approves the sign-in in a browser. Returns the control channel. */
+async function signIn(stateDir: string, driveDir: string): Promise<URL> {
     let controlUrl: URL | undefined;
     const urlSeen = new Promise<void>((resolve) => {
         authLogin({
@@ -44,7 +44,8 @@ async function signIn(stateDir: string, driveDir: string): Promise<void> {
         });
     });
     await urlSeen;
-    await fetch(new URL('account/approve', controlUrl), { method: 'POST' });
+    await fetch(new URL('account/approve', controlUrl!), { method: 'POST' });
+    return controlUrl!;
 }
 
 describe('serveCommand', () => {
@@ -131,6 +132,97 @@ describe('serveCommand', () => {
         expect(warns).toEqual([]);
     });
 
+    test('PUT writes a new file with one revision, its media type, and its size declared first', async () => {
+        const stateDir = scratch('state');
+        const driveDir = scratch('drive');
+        const controlUrl = await signIn(stateDir, driveDir);
+        await fetch(new URL('add', controlUrl), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: '/Photos', type: 'folder' }),
+        });
+        const abort = new AbortController();
+        const infos: string[] = [];
+        const logger = { ...QUIET, info: (line: string) => infos.push(line) };
+        const serving = serveCommand({ stateDir, host: '127.0.0.1', port: 0, logger, fakeDriveDir: driveDir, signal: abort.signal });
+        const url = (await waitFor(infos, 'Serving Proton Drive'))!.match(/https?:\/\/\S+/)![0];
+
+        const put = await fetch(new URL('Photos/beach.jpg', url), {
+            method: 'PUT',
+            headers: { 'Content-Length': '12', 'Content-Type': 'image/jpeg' },
+            body: 'sand and sea',
+        });
+        abort.abort();
+        await serving;
+
+        expect(put.status).toBe(201);
+        const beach = driveNode(driveDir, 'beach.jpg');
+        expect(beach.revisions).toHaveLength(1);
+        expect(beach.revisions[0].mediaType).toBe('image/jpeg');
+        expect(beach.revisions[0].declaredSize).toBe(12);
+        const content = readFileSync(join(driveDir, 'blobs', beach.revisions[0].blob));
+        expect(content.toString()).toBe('sand and sea');
+    });
+
+    test('PUT over an existing file adds a revision and keeps the old content', async () => {
+        const stateDir = scratch('state');
+        const driveDir = scratch('drive');
+        const controlUrl = await signIn(stateDir, driveDir);
+        await fetch(new URL('add', controlUrl), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: '/Photos/beach.jpg', type: 'file', contentBase64: btoa('sand and sea') }),
+        });
+        const abort = new AbortController();
+        const infos: string[] = [];
+        const logger = { ...QUIET, info: (line: string) => infos.push(line) };
+        const serving = serveCommand({ stateDir, host: '127.0.0.1', port: 0, logger, fakeDriveDir: driveDir, signal: abort.signal });
+        const url = (await waitFor(infos, 'Serving Proton Drive'))!.match(/https?:\/\/\S+/)![0];
+
+        const put = await fetch(new URL('Photos/beach.jpg', url), {
+            method: 'PUT',
+            headers: { 'Content-Length': '12' },
+            body: 'sand and snow',
+        });
+        abort.abort();
+        await serving;
+
+        expect(put.status).toBe(204);
+        const beach = driveNode(driveDir, 'beach.jpg');
+        expect(beach.revisions).toHaveLength(2);
+        const old = readFileSync(join(driveDir, 'blobs', beach.revisions[0].blob));
+        expect(old.toString()).toBe('sand and sea');
+        const now = readFileSync(join(driveDir, 'blobs', beach.revisions[1].blob));
+        expect(now.toString()).toBe('sand and snow');
+    });
+
+    test('a write tells the Drive its size before it sends the bytes', async () => {
+        const stateDir = scratch('state');
+        const driveDir = scratch('drive');
+        const controlUrl = await signIn(stateDir, driveDir);
+        await fetch(new URL('add', controlUrl), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: '/Photos', type: 'folder' }),
+        });
+        const abort = new AbortController();
+        const infos: string[] = [];
+        const logger = { ...QUIET, info: (line: string) => infos.push(line) };
+        const serving = serveCommand({ stateDir, host: '127.0.0.1', port: 0, logger, fakeDriveDir: driveDir, signal: abort.signal });
+        const url = (await waitFor(infos, 'Serving Proton Drive'))!.match(/https?:\/\/\S+/)![0];
+
+        await fetch(new URL('Photos/beach.jpg', url), {
+            method: 'PUT',
+            headers: { 'Content-Length': '12' },
+            body: 'sand and sea',
+        });
+        abort.abort();
+        await serving;
+
+        const beach = driveNode(driveDir, 'beach.jpg');
+        expect(beach.revisions[0].declaredSize).toBe(12);
+    });
+
     test('a second serve on one state directory is refused, naming the first pid', async () => {
         const stateDir = scratch('state');
         const driveDir = scratch('drive');
@@ -153,6 +245,16 @@ describe('serveCommand', () => {
         expect(String(secondError)).toContain(stateDir);
     });
 });
+
+/** The node named `name` in the fake drive's persisted state, for looking at it from the outside. */
+function driveNode(driveDir: string, name: string): { revisions: { blob: string; declaredSize: number | null; mediaType: string }[] } {
+    const state = JSON.parse(readFileSync(join(driveDir, 'drive.json'), 'utf8')) as {
+        nodes: Record<string, { name: string; revisions: { blob: string; declaredSize: number | null; mediaType: string }[] }>;
+    };
+    const found = Object.values(state.nodes).find((node) => node.name === name);
+    expect(found).toBeDefined();
+    return found!;
+}
 
 async function waitFor(lines: string[], part: string): Promise<string | undefined> {
     for (let i = 0; i < 500; i++) {

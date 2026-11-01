@@ -85,7 +85,7 @@ describe('createWebDavHandler', () => {
         const response = await handle(new Request('http://127.0.0.1/', { method: 'OPTIONS' }));
         expect(response.status).toBe(200);
         expect(response.headers.get('DAV')).toBe('1');
-        expect(response.headers.get('Allow')).toBe('OPTIONS, PROPFIND, GET, HEAD');
+        expect(response.headers.get('Allow')).toBe('OPTIONS, PROPFIND, GET, HEAD, PUT');
         expect(response.headers.get('MS-Author-Via')).toBe('DAV');
     });
 
@@ -121,9 +121,9 @@ describe('createWebDavHandler', () => {
 
     test('a method the serve does not answer yet is 405, naming what it does answer', async () => {
         const { handle } = handler();
-        const response = await handle(new Request('http://127.0.0.1/', { method: 'PUT' }));
+        const response = await handle(new Request('http://127.0.0.1/', { method: 'MKCOL' }));
         expect(response.status).toBe(405);
-        expect(response.headers.get('Allow')).toBe('OPTIONS, PROPFIND, GET, HEAD');
+        expect(response.headers.get('Allow')).toBe('OPTIONS, PROPFIND, GET, HEAD, PUT');
     });
 
     test('a bad path segment is 400, and an unexpected error is 500', async () => {
@@ -235,6 +235,129 @@ describe('GET and HEAD', () => {
         expect(await folder.text()).toContain('use PROPFIND');
         const missing = await handle(new Request('http://127.0.0.1/nope'));
         expect(missing.status).toBe(404);
+    });
+});
+
+describe('PUT', () => {
+    /** A tree that records every upload with the body it was handed. */
+    function treeWithUploads(existing: Record<string, Entry> = {}) {
+        const uploads: { segments: string[]; name: string; body: string; options: unknown }[] = [];
+        const tree = {
+            root: async () => ROOT,
+            list: async () => [],
+            stat: async (segments: string[]) => existing[segments.join('/')],
+            upload: async (
+                segments: string[],
+                name: string,
+                body: ReadableStream<Uint8Array>,
+                options: { size?: number; mediaType: string; modified?: Date },
+            ) => {
+                uploads.push({ segments, name, body: await new Response(body).text(), options });
+                const parent = existing[segments.join('/')] ?? ROOT;
+                const entry: Entry = {
+                    uid: `new-${name}`,
+                    name,
+                    kind: 'file',
+                    size: options.size ?? 0,
+                    modified: options.modified ?? new Date('2026-02-01T00:00:00Z'),
+                    created: new Date('2026-01-01T00:00:00Z'),
+                    revisionUid: 'new-rev',
+                    treeEventScopeId: 'volume-1',
+                };
+                return { entry, created: !existing[`${segments.join('/')}/${name}`] };
+            },
+        } as unknown as DriveTree & { uploads: typeof uploads };
+        tree.uploads = uploads;
+        return tree as unknown as DriveTree & { uploads: typeof uploads };
+    }
+
+    function put(path: string, init: RequestInit = {}) {
+        const tree = treeWithUploads({ Photos: { ...ROOT, uid: 'photos', name: 'Photos' } });
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        return { tree, response: handle(new Request(`http://127.0.0.1${path}`, { method: 'PUT', ...init })) };
+    }
+
+    test('a new name is 201, and the tree gets the size, media type and mtime', async () => {
+        const { tree, response: pending } = put('/Photos/beach.jpg', {
+            headers: { 'Content-Length': '12', 'Content-Type': 'image/jpeg', 'X-OC-Mtime': '1770000000' },
+            body: 'sand and sea',
+        });
+        const response = await pending;
+        expect(response.status).toBe(201);
+        const upload = tree.uploads[0]!;
+        expect(upload.segments).toEqual(['Photos']);
+        expect(upload.name).toBe('beach.jpg');
+        expect(upload.body).toBe('sand and sea');
+        expect(upload.options).toEqual({
+            size: 12,
+            mediaType: 'image/jpeg',
+            modified: new Date(1770000000 * 1000),
+        });
+    });
+
+    test('an existing name is 204 with a new revision', async () => {
+        const photos: Entry = { ...ROOT, uid: 'photos', name: 'Photos' };
+        const tree = treeWithUploads({
+            Photos: photos,
+            'Photos/beach.jpg': fileEntry('beach.jpg', 12),
+        });
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(
+            new Request('http://127.0.0.1/Photos/beach.jpg', {
+                method: 'PUT',
+                headers: { 'Content-Length': '12' },
+                body: 'sand and snow',
+            }),
+        );
+        expect(response.status).toBe(204);
+        expect(tree.uploads[0]?.body).toBe('sand and snow');
+    });
+
+    test('a missing Content-Type means application/octet-stream', async () => {
+        const { tree, response: pending } = put('/Photos/beach.jpg', {
+            headers: { 'Content-Length': '12' },
+            body: 'sand and sea',
+        });
+        await pending;
+        expect(tree.uploads[0]?.options).toMatchObject({ mediaType: 'application/octet-stream' });
+    });
+
+    test('PUT to the root folder is 405', async () => {
+        const { response: pending } = put('/', { headers: { 'Content-Length': '0' }, body: '' });
+        expect((await pending).status).toBe(405);
+    });
+
+    test('a bad Content-Length is 400', async () => {
+        const { response: pending } = put('/Photos/beach.jpg', {
+            headers: { 'Content-Length': '-1' },
+            body: 'sand and sea',
+        });
+        const response = await pending;
+        expect(response.status).toBe(400);
+        expect(await response.text()).toContain('Bad Content-Length');
+    });
+
+    test('a missing body is never an empty file unless the client said 0 bytes', async () => {
+        const tree = treeWithUploads({ Photos: { ...ROOT, uid: 'photos', name: 'Photos' } });
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const noBody = await handle(
+            new Request('http://127.0.0.1/Photos/beach.jpg', { method: 'PUT', headers: { 'Content-Length': '12' } }),
+        );
+        expect(noBody.status).toBe(400);
+        const noLength = await handle(new Request('http://127.0.0.1/Photos/beach.jpg', { method: 'PUT' }));
+        expect(noLength.status).toBe(400);
+        expect(await noLength.text()).toContain('no body and no Content-Length');
+        expect(tree.uploads).toEqual([]);
+    });
+
+    test('an explicit 0 bytes uploads an empty file', async () => {
+        const { tree, response: pending } = put('/Photos/empty.txt', {
+            headers: { 'Content-Length': '0' },
+        });
+        const response = await pending;
+        expect(response.status).toBe(201);
+        expect(tree.uploads).toHaveLength(1);
+        expect(tree.uploads[0]?.body).toBe('');
     });
 });
 

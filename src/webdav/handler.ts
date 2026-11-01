@@ -7,7 +7,7 @@ import { parsePath } from './paths';
 import { etagFor, multistatus } from './xml';
 
 /** The methods this serve answers; the other capabilities grow this as they land. */
-const ALLOW = 'OPTIONS, PROPFIND, GET, HEAD';
+const ALLOW = 'OPTIONS, PROPFIND, GET, HEAD, PUT';
 
 export type HandlerOptions = {
     tree: DriveTree;
@@ -46,6 +46,8 @@ export function createWebDavHandler(options: HandlerOptions): WebDavHandler {
             case 'GET':
             case 'HEAD':
                 return get(request, segments);
+            case 'PUT':
+                return put(request, segments);
             default:
                 return new Response(`${request.method} is not supported\n`, { status: 405, headers: { Allow: ALLOW } });
         }
@@ -93,6 +95,38 @@ export function createWebDavHandler(options: HandlerOptions): WebDavHandler {
         return new Response(body, { status, headers });
     }
 
+    async function put(request: Request, segments: string[]): Promise<Response> {
+        if (segments.length === 0) {
+            return text(405, 'Cannot PUT to the root folder');
+        }
+        const contentLength = request.headers.get('Content-Length');
+        const size = contentLength === null ? undefined : Number(contentLength);
+        if (contentLength !== null && (!Number.isSafeInteger(size) || size! < 0)) {
+            return text(400, `Bad Content-Length ${contentLength}`);
+        }
+        // Never turn a missing body into an empty file unless the client said "0 bytes".
+        if (!request.body && size !== 0) {
+            return text(
+                400,
+                contentLength === null
+                    ? 'PUT has no body and no Content-Length'
+                    : `PUT declared ${contentLength} bytes but has no body`,
+            );
+        }
+        const { created } = await tree.upload(
+            segments.slice(0, -1),
+            segments[segments.length - 1],
+            request.body ?? emptyStream(),
+            {
+                size,
+                mediaType: mediaTypeOf(request),
+                modified: modifiedOf(request),
+            },
+            request.signal,
+        );
+        return new Response(null, { status: created ? 201 : 204 });
+    }
+
     async function requireEntry(segments: string[]): Promise<NonNullable<Awaited<ReturnType<typeof tree.stat>>>> {
         const entry = await tree.stat(segments);
         if (!entry) {
@@ -132,6 +166,29 @@ export function parseRange(header: string | null, size: number): ByteRange | 'un
         return 'unsatisfiable';
     }
     return { start, end };
+}
+
+function emptyStream(): ReadableStream<Uint8Array> {
+    return new ReadableStream({
+        start(controller) {
+            controller.close();
+        },
+    });
+}
+
+/** The media type without its parameters, defaulting as a WebDAV server does. */
+function mediaTypeOf(request: Request): string {
+    return request.headers.get('Content-Type')?.split(';')[0].trim() || 'application/octet-stream';
+}
+
+/** Reads `X-OC-Mtime` (Unix seconds), which ownCloud-style clients send. */
+function modifiedOf(request: Request): Date | undefined {
+    const header = request.headers.get('X-OC-Mtime');
+    if (!header) {
+        return undefined;
+    }
+    const seconds = Number(header);
+    return Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000) : undefined;
 }
 
 function errorResponse(error: unknown, logger: Logger, what: string): Response {

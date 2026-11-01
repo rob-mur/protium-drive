@@ -10,6 +10,15 @@ import type { DriveSdk } from './sdk';
 /** One folder's children, by name. */
 type Listing = Map<string, Entry>;
 
+/** What the client declared about the file it uploads. */
+export type UploadOptions = {
+    /** Clear-text size in bytes, from `Content-Length`; `undefined` when unknown. */
+    size?: number;
+    mediaType: string;
+    /** The file's own modification time, from `X-OC-Mtime`. */
+    modified?: Date;
+};
+
 /**
  * Proton Drive as a tree of paths, on top of the SDK's node UIDs.
  *
@@ -66,6 +75,43 @@ export class DriveTree {
             signal,
             logger: this.logger,
         });
+    }
+
+    /**
+     * Uploads a file. A new name creates a file; an existing file gets a new
+     * revision, so Proton keeps the old content in the file's history. `size`
+     * drives the SDK's exact size check; pass it whenever the client declared
+     * `Content-Length`.
+     */
+    async upload(
+        parentSegments: string[],
+        name: string,
+        body: ReadableStream<Uint8Array>,
+        options: UploadOptions,
+        signal?: AbortSignal,
+    ): Promise<{ entry: Entry; created: boolean }> {
+        const parent = await this.stat(parentSegments);
+        if (!parent || parent.kind !== 'folder') {
+            throw new DriveError(409, `/${parentSegments.join('/')} is not a folder`);
+        }
+        const existing = (await this.listing(parent.uid)).get(name);
+        if (existing?.kind === 'folder') {
+            throw new DriveError(405, `${name} is a folder`);
+        }
+        const metadata = {
+            mediaType: options.mediaType,
+            expectedSize: options.size ?? null,
+            ...(options.modified ? { modificationTime: options.modified } : {}),
+        };
+        const uploader = existing
+            ? await this.sdk.getFileRevisionUploader(existing.uid, metadata, signal)
+            : await this.sdk.getFileUploader(parent.uid, name, metadata, signal);
+        const controller = await uploader.uploadFromStream(body, []);
+        const result = await controller.completion();
+        const node = await this.sdk.getNode(result.nodeUid);
+        // The listing holds the old entry (or none); drop it so the next ask reloads the folder.
+        this.listings.delete(parent.uid);
+        return { entry: toEntry(node as NodeEntity) as Entry, created: !existing };
     }
 
     /** The folder's cached listing, loading it from the SDK on the first ask. */
