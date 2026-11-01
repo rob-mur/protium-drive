@@ -93,6 +93,60 @@ describe('DriveTree', () => {
     });
 });
 
+describe('DriveTree root path', () => {
+    /** The fixture the scenarios describe: My files with Photos/immich/beach.jpg and Documents/cv.pdf. */
+    function fixture(): Map<string, Node> {
+        return new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+            ['immich', folder('immich', 'immich', 'photos')],
+            ['beach', file('beach', 'beach.jpg', 'immich')],
+            ['docs', folder('docs', 'Documents', 'root')],
+            ['cv', file('cv', 'cv.pdf', 'docs')],
+        ]);
+    }
+
+    test('a root path serves that folder as the root, and paths are relative to it', async () => {
+        const tree = new DriveTree(fakeSdk(fixture()) as never, QUIET, undefined, { rootPath: ['Photos', 'immich'] });
+        const root = await tree.root();
+        expect(root).toMatchObject({ uid: 'immich', name: 'immich', kind: 'folder' });
+        expect((await tree.stat([]))?.uid).toBe('immich');
+        expect((await tree.stat(['beach.jpg']))?.uid).toBe('beach');
+        expect(await tree.stat(['Documents', 'cv.pdf'])).toBeUndefined();
+        expect((await tree.list(root)).map((entry) => entry.name)).toEqual(['beach.jpg']);
+    });
+
+    test('a missing root folder fails the first ask naming the folder', async () => {
+        const nodes = fixture();
+        nodes.delete('immich'); // My files holds Photos but not its immich folder
+        const missing = new DriveTree(fakeSdk(nodes) as never, QUIET, undefined, { rootPath: ['Photos', 'immich'] });
+        await expect(missing.root()).rejects.toThrow('Root folder /Photos/immich does not exist in My files');
+        await expect(missing.stat([])).rejects.toThrow('Root folder /Photos/immich does not exist in My files');
+    });
+
+    test('a root path that names a file fails naming the folder', async () => {
+        const tree = new DriveTree(fakeSdk(fixture()) as never, QUIET, undefined, { rootPath: ['Photos', 'immich', 'beach.jpg'] });
+        await expect(tree.root()).rejects.toThrow('Root folder /Photos/immich/beach.jpg does not exist in My files');
+    });
+
+    test('a failed root lookup is not cached, so the next ask loads it again', async () => {
+        const nodes = fixture();
+        const sdk = fakeSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET, undefined, { rootPath: ['Photos', 'immich'] });
+        nodes.delete('immich');
+        await expect(tree.root()).rejects.toThrow('Root folder /Photos/immich does not exist in My files');
+        nodes.set('immich', folder('immich', 'immich', 'photos'));
+        expect((await tree.root()).uid).toBe('immich');
+    });
+
+    test('the watcher scope travels with the served root, not with My files', async () => {
+        const nodes = fixture();
+        (nodes.get('immich') as Node).treeEventScopeId = 'immich-scope';
+        const tree = new DriveTree(fakeSdk(nodes) as never, QUIET, undefined, { rootPath: ['Photos', 'immich'] });
+        expect((await tree.root()).treeEventScopeId).toBe('immich-scope');
+    });
+});
+
 describe('DriveTree unservable nodes', () => {
     /** A logger that records what the tree warns and debugs about. */
     function recordingLogger() {

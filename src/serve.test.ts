@@ -8,6 +8,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { authLogin } from './auth/login.ts';
 import { createLogger } from './logger.ts';
 import { serveCommand, NOT_SIGNED_IN, LOOPBACK_WARNING } from './serve.ts';
+import { startReceiveArm } from '../fake-drive/receive-arm.ts';
 
 const DIRS: string[] = [];
 const QUIET = createLogger({ PDM_LOG_LEVEL: 'error' });
@@ -46,6 +47,26 @@ async function signIn(stateDir: string, driveDir: string): Promise<URL> {
     await urlSeen;
     await fetch(new URL('account/approve', controlUrl!), { method: 'POST' });
     return controlUrl!;
+}
+
+/**
+ * Writes nodes into the Drive before any sign-in: the login's Receive arm stops
+ * with the login, so the control channel is only good for seeding up front.
+ */
+async function seedDrive(driveDir: string, nodes: { path: string; type: 'folder' | 'file'; contentBase64?: string }[]): Promise<void> {
+    const arm = await startReceiveArm(driveDir);
+    try {
+        for (const node of nodes) {
+            const response = await fetch(new URL('add', arm.controlUrl), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(node),
+            });
+            expect(response.status).toBe(200);
+        }
+    } finally {
+        await arm.stop();
+    }
 }
 
 describe('serveCommand', () => {
@@ -135,12 +156,8 @@ describe('serveCommand', () => {
     test('PUT writes a new file with one revision, its media type, and its size declared first', async () => {
         const stateDir = scratch('state');
         const driveDir = scratch('drive');
-        const controlUrl = await signIn(stateDir, driveDir);
-        await fetch(new URL('add', controlUrl), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: '/Photos', type: 'folder' }),
-        });
+        await seedDrive(driveDir, [{ path: '/Photos', type: 'folder' }]);
+        await signIn(stateDir, driveDir);
         const abort = new AbortController();
         const infos: string[] = [];
         const logger = { ...QUIET, info: (line: string) => infos.push(line) };
@@ -167,12 +184,8 @@ describe('serveCommand', () => {
     test('PUT over an existing file adds a revision and keeps the old content', async () => {
         const stateDir = scratch('state');
         const driveDir = scratch('drive');
-        const controlUrl = await signIn(stateDir, driveDir);
-        await fetch(new URL('add', controlUrl), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: '/Photos/beach.jpg', type: 'file', contentBase64: btoa('sand and sea') }),
-        });
+        await seedDrive(driveDir, [{ path: '/Photos/beach.jpg', type: 'file', contentBase64: btoa('sand and sea') }]);
+        await signIn(stateDir, driveDir);
         const abort = new AbortController();
         const infos: string[] = [];
         const logger = { ...QUIET, info: (line: string) => infos.push(line) };
@@ -199,12 +212,8 @@ describe('serveCommand', () => {
     test('a write tells the Drive its size before it sends the bytes', async () => {
         const stateDir = scratch('state');
         const driveDir = scratch('drive');
-        const controlUrl = await signIn(stateDir, driveDir);
-        await fetch(new URL('add', controlUrl), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: '/Photos', type: 'folder' }),
-        });
+        await seedDrive(driveDir, [{ path: '/Photos', type: 'folder' }]);
+        await signIn(stateDir, driveDir);
         const abort = new AbortController();
         const infos: string[] = [];
         const logger = { ...QUIET, info: (line: string) => infos.push(line) };
@@ -223,8 +232,73 @@ describe('serveCommand', () => {
         expect(beach.revisions[0].declaredSize).toBe(12);
     });
 
-    test('a second serve on one state directory is refused, naming the first pid', async () => {
+    test('--root serves one folder of My files as the root', async () => {
         const stateDir = scratch('state');
+        const driveDir = scratch('drive');
+        await seedDrive(driveDir, [
+            { path: '/Photos/immich', type: 'folder' },
+            { path: '/Documents', type: 'folder' },
+            { path: '/Photos/immich/beach.jpg', type: 'file', contentBase64: btoa('sand and sea') },
+        ]);
+        await signIn(stateDir, driveDir);
+        const abort = new AbortController();
+        const infos: string[] = [];
+        const logger = { ...QUIET, info: (line: string) => infos.push(line) };
+        const serving = serveCommand({
+            stateDir,
+            host: '127.0.0.1',
+            port: 0,
+            logger,
+            fakeDriveDir: driveDir,
+            root: 'Photos/immich',
+            signal: abort.signal,
+        });
+        const servingLine = (await waitFor(infos, 'Serving Proton Drive'))!;
+        expect(servingLine).toContain('folder /Photos/immich');
+        const url = servingLine.match(/https?:\/\/\S+/)![0];
+
+        const propfind = await fetch(url, { method: 'PROPFIND', headers: { Depth: '1' } });
+        const body = await propfind.text();
+        const beach = await fetch(new URL('beach.jpg', url), { method: 'GET' });
+        abort.abort();
+        expect(await serving).toBe(0);
+
+        expect(propfind.status).toBe(207);
+        // The listing shows only the served folder's child, not the rest of My files.
+        expect(body).toContain('beach.jpg');
+        expect(body).not.toContain('Documents');
+        expect(beach.status).toBe(200);
+        expect(await beach.text()).toBe('sand and sea');
+    });
+
+    test('--root on a folder that does not exist fails the first request naming it', async () => {
+        const stateDir = scratch('state');
+        const driveDir = scratch('drive');
+        await seedDrive(driveDir, [{ path: '/Photos/beach.jpg', type: 'file', contentBase64: btoa('sand and sea') }]);
+        await signIn(stateDir, driveDir);
+        const abort = new AbortController();
+        const infos: string[] = [];
+        const logger = { ...QUIET, info: (line: string) => infos.push(line) };
+        const serving = serveCommand({
+            stateDir,
+            host: '127.0.0.1',
+            port: 0,
+            logger,
+            fakeDriveDir: driveDir,
+            root: 'Photos/immich',
+            signal: abort.signal,
+        });
+        const url = (await waitFor(infos, 'Serving Proton Drive'))!.match(/https?:\/\/\S+/)![0];
+
+        const propfind = await fetch(url, { method: 'PROPFIND', headers: { Depth: '1' } });
+        abort.abort();
+        expect(await serving).toBe(0);
+
+        expect(propfind.status).toBe(500);
+        expect(await propfind.text()).toContain('Root folder /Photos/immich does not exist in My files');
+    });
+
+    test('a second serve on one state directory is refused, naming the first pid', async () => {        const stateDir = scratch('state');
         const driveDir = scratch('drive');
         await signIn(stateDir, driveDir);
         const abort = new AbortController();

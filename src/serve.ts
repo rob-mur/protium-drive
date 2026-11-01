@@ -5,6 +5,7 @@ import { DriveTree } from './drive/tree';
 import { acquireStateLock } from './session/lock';
 import { connect } from './proton/connect';
 import { createWebDavHandler } from './webdav/handler';
+import { parsePath } from './webdav/paths';
 import { startServer, type RunningServer } from './webdav/server';
 
 export const DEFAULT_HOST = '127.0.0.1';
@@ -23,6 +24,8 @@ export type ServeOptions = {
     logger: Logger;
     /** The fake drive's directory (`--fake-drive`): the Drive then comes from the Receive arm. */
     fakeDriveDir?: string;
+    /** A folder of My files to serve as the root (`--root`), for example `Photos/immich`. */
+    root?: string;
     /** Resolves when the serve should stop; SIGINT and SIGTERM resolve it. */
     signal?: AbortSignal;
 };
@@ -51,13 +54,15 @@ export async function serveCommand(options: ServeOptions): Promise<number> {
                 logger.warn(LOOPBACK_WARNING(host));
             }
             const sdk = await connection.createDriveClient();
-            const tree = new DriveTree(sdk, logger, new Backoff(connection.clock?.now.bind(connection.clock)));
+            const tree = new DriveTree(sdk, logger, new Backoff(connection.clock?.now.bind(connection.clock)), {
+                rootPath: options.root ? parsePath(options.root) : undefined,
+            });
             const server = startServer({
                 host,
                 port,
                 handler: createWebDavHandler({ tree, logger }),
             });
-            logger.info(`Serving Proton Drive My files at ${server.url.href}`);
+            logger.info(`Serving Proton Drive ${options.root ? `folder /${options.root}` : 'My files'} at ${server.url.href}`);
             await waitUntil(signal);
             logger.info('Stopping');
             await stop(server);

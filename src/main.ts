@@ -23,7 +23,7 @@ ${THIRD_PARTY_NOTICE}
 
 Usage:
   proton-drive-mount auth login [--state-dir DIR] [--fake-drive DIR]
-  proton-drive-mount serve [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--state-dir DIR] [--fake-drive DIR]
+  proton-drive-mount serve [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--root PATH] [--state-dir DIR] [--fake-drive DIR]
   proton-drive-mount --version
   proton-drive-mount help
 
@@ -34,6 +34,7 @@ Options:
   --host HOST       Address for serve to listen on. Default: ${DEFAULT_HOST}. The server has no
                     authentication of its own; keep it on loopback.
   --port PORT       Port for serve to listen on. Default: ${DEFAULT_PORT}.
+  --root PATH       Folder inside "My files" to serve as /. Default: all of My files.
 `;
 
 export function versionAnswer(env: NodeJS.ProcessEnv = process.env): string {
@@ -89,6 +90,7 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
             'fake-drive': { type: 'string' },
             host: { type: 'string' },
             port: { type: 'string' },
+            root: { type: 'string' },
             help: { type: 'boolean', short: 'h' },
             version: { type: 'boolean' },
         },
@@ -121,6 +123,7 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
             port,
             logger: createLogger(env),
             fakeDriveDir: values['fake-drive'],
+            root: values.root,
             signal,
         });
         return { code, stdout: '', stderr: '' };

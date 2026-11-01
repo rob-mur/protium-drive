@@ -20,6 +20,15 @@ export type UploadOptions = {
     modified?: Date;
 };
 
+export type DriveTreeOptions = {
+    /**
+     * The folder of My files to serve as the root (`--root`), as path
+     * segments. When set, every path the tree answers is relative to it, and
+     * the first ask that finds it missing fails naming it.
+     */
+    rootPath?: string[];
+};
+
 /**
  * Proton Drive as a tree of paths, on top of the SDK's node UIDs.
  *
@@ -36,12 +45,16 @@ export class DriveTree {
         private readonly sdk: DriveSdk,
         private readonly logger: Logger,
         readonly backoff: Backoff = new Backoff(),
+        private readonly options: DriveTreeOptions = {},
     ) {}
 
-    /** The served root: My files. */
+    /** The served root: My files, or the `--root` folder inside it. */
     root(): Promise<Entry> {
         this.rootEntry ??= this.loadRoot().catch((error: unknown) => {
             this.rootEntry = undefined;
+            // The lookup may have cached listings on its way down; drop them so
+            // the next ask, after e.g. the root folder appears, sees Drive anew.
+            this.listings.clear();
             throw error;
         });
         return this.rootEntry;
@@ -211,12 +224,28 @@ export class DriveTree {
 
     private loadRoot(): Promise<Entry> {
         return this.backoff.run(async () => {
-            const entry = toEntry(await this.sdk.getMyFilesRootFolder());
+            let entry = toEntry(await this.sdk.getMyFilesRootFolder());
             if (isSkipped(entry)) {
                 throw new Error(`Cannot serve the root of My files: ${entry.skipped}`);
+            }
+            const rootPath = this.options.rootPath ?? [];
+            for (const segment of rootPath) {
+                if (entry.kind !== 'folder') {
+                    throw missingRoot(rootPath);
+                }
+                const child: Entry | undefined = (await this.listing(entry.uid)).get(segment);
+                if (!child || child.kind !== 'folder') {
+                    throw missingRoot(rootPath);
+                }
+                entry = child;
             }
             return entry;
         });
     }
+}
+
+/** The error for a configured root folder My files does not hold. */
+function missingRoot(rootPath: string[]): DriveError {
+    return new DriveError(500, `Root folder /${rootPath.join('/')} does not exist in My files`);
 }
 

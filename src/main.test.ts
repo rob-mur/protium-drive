@@ -96,6 +96,7 @@ describe('serve dispatch', () => {
         expect(HELP).toContain('serve [--host 127.0.0.1] [--port 7395]');
         expect(HELP).toContain('--host HOST');
         expect(HELP).toContain('--port PORT');
+        expect(HELP).toContain('--root PATH');
     });
 
     test('a bad --port exits 2 without starting anything', async () => {
