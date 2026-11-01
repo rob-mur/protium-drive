@@ -54,7 +54,9 @@ function fakeSdk(nodes: Map<string, Node>) {
         iterateNodes: async function* (uids: NodeOrUid[]) {
             count('iterateNodes');
             for (const uid of uids) {
-                yield nodes.get(typeof uid === 'string' ? uid : uid.uid) as MaybeMissingNode;
+                const key = typeof uid === 'string' ? uid : uid.uid;
+                // A UID the node map does not hold comes back as a missing node.
+                yield (nodes.get(key) ?? { missingUid: key }) as MaybeMissingNode;
             }
         },
     } as DriveSdk & { calls: Map<string, number> };
@@ -87,6 +89,64 @@ describe('DriveTree', () => {
         expect((await tree.stat(['Documents', 'note.txt']))?.uid).toBe('note');
         expect(await tree.stat(['Documents', 'missing'])).toBeUndefined();
         expect(await tree.stat(['note.txt', 'deeper'])).toBeUndefined();
+    });
+});
+
+describe('DriveTree unservable nodes', () => {
+    /** A logger that records what the tree warns and debugs about. */
+    function recordingLogger() {
+        const warnings: string[] = [];
+        return { warnings, debug() {}, info() {}, warn(message: string) { warnings.push(message); }, error() {} };
+    }
+
+    /** A fixture folder holding a healthy file plus one unservable sibling. */
+    function fixtureWith(sibling: Node): Map<string, Node> {
+        return new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+            ['beach', file('beach', 'beach.jpg', 'photos')],
+            [sibling.uid, sibling],
+        ]);
+    }
+
+    test('a trashed sibling is not listed and draws no warning', async () => {
+        const trashed = file('old', 'old.jpg', 'photos');
+        trashed.trashTime = new Date('2026-02-03T00:00:00Z');
+        const logger = recordingLogger();
+        const tree = new DriveTree(fakeSdk(fixtureWith(trashed)) as never, logger);
+        const listed = await tree.list((await tree.stat(['Photos']))!);
+        expect(listed.map((entry) => entry.name)).toEqual(['beach.jpg']);
+        expect(logger.warnings).toEqual([]);
+    });
+
+    test('a sibling whose name cannot be decrypted is not listed and draws a warning', async () => {
+        const undecryptable = file('hidden', 'hidden.jpg', 'photos');
+        undecryptable.name = { ok: false, error: new Error('cannot decrypt') };
+        const logger = recordingLogger();
+        const tree = new DriveTree(fakeSdk(fixtureWith(undecryptable)) as never, logger);
+        const listed = await tree.list((await tree.stat(['Photos']))!);
+        expect(listed.map((entry) => entry.name)).toEqual(['beach.jpg']);
+        expect(logger.warnings).toEqual([expect.stringContaining('hidden')]);
+    });
+
+    test('a sibling with no clear-text size is not listed and draws a warning', async () => {
+        const unsized = file('odd', 'odd.jpg', 'photos');
+        (unsized.activeRevision as { claimedSize?: number }).claimedSize = undefined;
+        const logger = recordingLogger();
+        const tree = new DriveTree(fakeSdk(fixtureWith(unsized)) as never, logger);
+        const listed = await tree.list((await tree.stat(['Photos']))!);
+        expect(listed.map((entry) => entry.name)).toEqual(['beach.jpg']);
+        expect(logger.warnings).toEqual([expect.stringContaining('odd')]);
+    });
+
+    test('a node that comes back missing is skipped without a warning', async () => {
+        const logger = recordingLogger();
+        const nodes = fixtureWith(file('ghost', 'ghost.jpg', 'photos'));
+        nodes.delete('ghost'); // the SDK yields only its missingUid for it
+        const tree = new DriveTree(fakeSdk(nodes) as never, logger);
+        const listed = await tree.list((await tree.stat(['Photos']))!);
+        expect(listed.map((entry) => entry.name)).toEqual(['beach.jpg']);
+        expect(logger.warnings).toEqual([]);
     });
 });
 

@@ -165,9 +165,14 @@ export class DriveTree {
         }
         const listing: Listing = new Map();
         for await (const node of this.sdk.iterateNodes(uids)) {
-            const entry = toEntry(node as NodeEntity);
+            if ('missingUid' in node) {
+                continue;
+            }
+            const entry = toEntry(node);
             if (isSkipped(entry)) {
-                this.logger.debug(`Not serving a node of ${folderUid}: ${entry.skipped}`);
+                if (entry.skipped !== 'trashed') {
+                    this.logger.warn(`Skipping node ${node.uid}: ${entry.skipped}`);
+                }
                 continue;
             }
             listing.set(entry.name, entry);
