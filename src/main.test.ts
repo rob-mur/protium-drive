@@ -8,7 +8,8 @@ import { VERSION as SDK_VERSION } from '@protontech/drive-sdk';
 
 import { VERSION } from './version.ts';
 
-import { HELP, THIRD_PARTY_NOTICE, run, runCommand, versionAnswer } from './main.ts';
+import { HELP, THIRD_PARTY_NOTICE, run, runCommand, versionAnswer, authStatus } from './main.ts';
+import { SessionFileStore } from './session/store.ts';
 
 const REV = 'b'.repeat(40);
 const ENV = { PDM_BUILD_REVISION: REV };
@@ -177,5 +178,65 @@ describe('auth login dispatch', () => {
         const answer = await runCommand(['nope'], {});
         expect(answer.code).toBe(2);
         expect(answer.stderr).toContain('Unknown command "nope"');
+    });
+});
+
+describe('auth status', () => {
+    const mkdtemp = (label: string) => mkdtempSync(join(tmpdir(), `pdm-main-status-${label}-XXXXXX`));
+
+    function storedSession(refreshRejectedAt?: string) {
+        return {
+            version: 1 as const,
+            appVersion: 'external-drive-protondrivemount@0.1.0-alpha',
+            savedAt: '2026-10-31T12:00:00.000Z',
+            userKeyPassword: 'key-password',
+            refreshRejectedAt,
+            session: { uid: 'abcdefgh-1234-5678-90ab-cdefghijklmn', accessToken: 'access-1-1', refreshToken: 'refresh-1' },
+        };
+    }
+
+    test('without a session it says not signed in and exits 1', async () => {
+        const stateDir = mkdtemp('empty');
+        const printed: string[] = [];
+        const code = await authStatus(stateDir, { print: (line) => printed.push(line), error: () => {} });
+        expect(code).toBe(1);
+        expect(printed.some((line) => line.includes('Not signed in'))).toBeTrue();
+    });
+
+    test('with a healthy session it reports it locally and exits 0', async () => {
+        const stateDir = mkdtemp('ok');
+        await new SessionFileStore(stateDir).save(storedSession());
+        const printed: string[] = [];
+        const code = await authStatus(stateDir, { print: (line) => printed.push(line), error: () => {} });
+        expect(code).toBe(0);
+        const text = printed.join('\n');
+        expect(text).toContain('Session UID:     abcdefgh…');
+        expect(text).toContain('Saved at:        2026-10-31T12:00:00.000Z');
+        expect(text).toContain('Refresh token:   present');
+        expect(text).toContain('signed in');
+        expect(text).toContain('makes no Proton call');
+    });
+
+    test('a session Proton refused is named, and exits 1', async () => {
+        const stateDir = mkdtemp('refused');
+        await new SessionFileStore(stateDir).save(storedSession('2026-10-31T13:00:00.000Z'));
+        const printed: string[] = [];
+        const code = await authStatus(stateDir, { print: (line) => printed.push(line), error: () => {} });
+        expect(code).toBe(1);
+        const text = printed.join('\n');
+        expect(text).toContain('Proton refused the session at 2026-10-31T13:00:00.000Z');
+        expect(text).toContain('Run "auth login" again');
+    });
+
+    test('runCommand dispatches auth status with the state dir', async () => {
+        const stateDir = mkdtemp('dispatch');
+        await new SessionFileStore(stateDir).save(storedSession());
+        const printed: string[] = [];
+        const answer = await runCommand(['auth', 'status', '--state-dir', stateDir], {}, {
+            print: (line) => printed.push(line),
+            error: (line) => printed.push(line),
+        });
+        expect(answer.code).toBe(0);
+        expect(printed.join('\n')).toContain('signed in');
     });
 });

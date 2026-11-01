@@ -157,6 +157,44 @@ describe('createWebDavHandler', () => {
     });
 });
 
+describe('auth problem', () => {
+    test('an auth problem answers 401 naming it, before any routing or Drive call', async () => {
+        const stats: string[][] = [];
+        const tree = {
+            root: async () => ROOT,
+            list: async () => [],
+            stat: async (segments: string[]) => {
+                stats.push(segments);
+                return undefined;
+            },
+        } as unknown as DriveTree;
+        const handle = createWebDavHandler({ tree, logger: QUIET, authProblem: () => 'Proton refused the stored session' });
+        const response = await handle(new Request('http://127.0.0.1/Photos', { method: 'PROPFIND', headers: { Depth: '1' } }));
+        expect(response.status).toBe(401);
+        expect(await response.text()).toContain('Proton refused the stored session');
+        // The tree was never reached for the refused session.
+        expect(stats).toEqual([]);
+    });
+
+    test('OPTIONS still answers while the session is refused', async () => {
+        const handle = createWebDavHandler({ tree: treeWithRoot(), logger: QUIET, authProblem: () => 'refused' });
+        expect((await handle(new Request('http://127.0.0.1/', { method: 'OPTIONS' }))).status).toBe(200);
+    });
+
+    test('an auth problem turns a mid-request failure into 401 rather than 500', async () => {
+        const broken = { root: async () => { throw new Error('boom'); }, list: async () => [], stat: async () => undefined } as unknown as DriveTree;
+        const handle = createWebDavHandler({ tree: broken, logger: QUIET, authProblem: () => 'Proton refused the stored session' });
+        const response = await handle(new Request('http://127.0.0.1/', { method: 'PROPFIND', headers: { Depth: '0' } }));
+        expect(response.status).toBe(401);
+        expect(await response.text()).toContain('Proton refused the stored session');
+    });
+
+    test('no auth problem means requests route as usual', async () => {
+        const handle = createWebDavHandler({ tree: treeWithRoot(), logger: QUIET, authProblem: () => undefined });
+        expect((await handle(new Request('http://127.0.0.1/', { method: 'PROPFIND', headers: { Depth: '0' } }))).status).toBe(207);
+    });
+});
+
 describe('GET and HEAD', () => {
     const CONTENT = patternBytes(4096);
 

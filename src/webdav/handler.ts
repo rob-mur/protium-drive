@@ -15,6 +15,12 @@ const ALLOW = 'OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL';
 export type HandlerOptions = {
     tree: DriveTree;
     logger: Logger;
+    /**
+     * Returns why Proton calls cannot work right now (no session, or Proton
+     * rejected the refresh token), or `undefined` when they can. Checked
+     * before each request, so a dead session costs no Proton traffic.
+     */
+    authProblem?: () => string | undefined;
     /** The failed-overwrite guard; a fresh one when omitted. */
     guard?: FailedPutGuard;
 };
@@ -24,6 +30,7 @@ export type WebDavHandler = (request: Request) => Promise<Response>;
 /** Maps WebDAV requests to `DriveTree` calls. */
 export function createWebDavHandler(options: HandlerOptions): WebDavHandler {
     const { tree, logger } = options;
+    const authProblem = options.authProblem ?? (() => undefined);
     const guard = options.guard ?? new FailedPutGuard();
 
     return async (request) => {
@@ -34,10 +41,15 @@ export function createWebDavHandler(options: HandlerOptions): WebDavHandler {
             if (request.method === 'OPTIONS') {
                 response = new Response(null, { status: 200, headers: { DAV: '1', Allow: ALLOW, 'MS-Author-Via': 'DAV' } });
             } else {
-                response = await route(request, parsePath(url.pathname));
+                const problem = authProblem();
+                if (problem) {
+                    response = text(401, problem);
+                } else {
+                    response = await route(request, parsePath(url.pathname));
+                }
             }
         } catch (error: unknown) {
-            response = errorResponse(error, tree, logger, `${request.method} ${url.pathname}`);
+            response = errorResponse(error, authProblem(), tree, logger, `${request.method} ${url.pathname}`);
         }
         logger.info(
             `${request.method} ${url.pathname} -> ${response.status} (${Math.round(performance.now() - started)} ms)`,
@@ -239,7 +251,7 @@ function modifiedOf(request: Request): Date | undefined {
     return Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000) : undefined;
 }
 
-function errorResponse(error: unknown, tree: DriveTree, logger: Logger, what: string): Response {
+function errorResponse(error: unknown, authProblem: string | undefined, tree: DriveTree, logger: Logger, what: string): Response {
     if (error instanceof DriveError) {
         if (error.status >= 500) {
             logger.warn(`${what}: ${error.message}`);
@@ -249,6 +261,9 @@ function errorResponse(error: unknown, tree: DriveTree, logger: Logger, what: st
             headers['Retry-After'] = String(error.retryAfterSeconds);
         }
         return text(error.status, error.message, headers);
+    }
+    if (authProblem) {
+        return text(401, authProblem);
     }
     if (error instanceof RateLimitedError) {
         logger.warn(`${what}: Proton rate limit: ${error.message}`);

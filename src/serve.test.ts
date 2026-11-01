@@ -319,6 +319,54 @@ describe('serveCommand', () => {
         expect(String(secondError)).toContain(stateDir);
     });
 
+    test('a refused refresh answers 401 from then on, and no further call reaches the Drive', async () => {
+        const stateDir = scratch('state');
+        const driveDir = scratch('drive');
+        await seedDrive(driveDir, [{ path: '/Photos/beach.jpg', type: 'file', contentBase64: btoa('sand and sea') }]);
+        await signIn(stateDir, driveDir);
+        const abort = new AbortController();
+        const infos: string[] = [];
+        const logger = { ...QUIET, info: (line: string) => infos.push(line) };
+        const controlSeen = captureControlUrl();
+        const serving = serveCommand({ stateDir, host: '127.0.0.1', port: 0, logger, fakeDriveDir: driveDir, signal: abort.signal });
+        const url = (await waitFor(infos, 'Serving Proton Drive'))!.match(/https?:\/\/\S+/)![0];
+        const control = await controlSeen;
+
+        // A healthy listing of the root first, so the serve really had a working session.
+        // (Listing /Photos only afterwards: the SDK's in-memory cache would answer a repeat
+        // listing with no Drive call at all, and the point here is the Drive call.)
+        const healthy = await fetch(url, { method: 'PROPFIND', headers: { Depth: '0' } });
+        expect(healthy.status).toBe(207);
+        const callsBefore = await (await fetch(new URL('calls', control))).json();
+
+        // Proton refuses the next refresh, and the access token expires, as the scenario does.
+        await fetch(new URL('account/refuse-next-refresh', control), { method: 'POST' });
+        await fetch(new URL('account/expire', control), { method: 'POST' });
+
+        const first = await fetch(new URL('Photos', url), { method: 'PROPFIND', headers: { Depth: '1' } });
+        const firstBody = await first.text();
+        // The refused listing itself reached the Drive once and was turned away there;
+        // everything after the refusal must reach nothing.
+        const callsAfterRefusal = await (await fetch(new URL('calls', control))).json();
+        const second = await fetch(new URL('Photos/beach.jpg', url), { method: 'PROPFIND', headers: { Depth: '0' } });
+        const secondBody = await second.text();
+        const report = (await (await fetch(new URL('account', control))).json()) as { refreshes: { used: string; outcome: string }[] };
+        const callsAfter = await (await fetch(new URL('calls', control))).json();
+        abort.abort();
+        expect(await serving).toBe(0);
+
+        expect(first.status).toBe(401);
+        expect(firstBody).toContain('Proton refused the stored session');
+        expect(second.status).toBe(401);
+        expect(secondBody).toContain('Proton refused the stored session');
+        // The account saw exactly one refresh, and it was the refused one.
+        expect(report.refreshes).toEqual([{ used: 'refresh-1', outcome: 'refused' }]);
+        // The session file keeps the refused session, marked.
+        expect(readFileSync(join(stateDir, 'session.json'), 'utf8')).toContain('refreshRejectedAt');
+        // No Drive call happened after the refusal.
+        expect(callsAfter).toEqual(callsAfterRefusal);
+    });
+
     test('a failed overwrite refuses the DELETE for 60 s on the Drive clock, then frees it', async () => {
         const stateDir = scratch('state');
         const driveDir = scratch('drive');

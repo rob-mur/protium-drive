@@ -3,6 +3,7 @@ import type { Logger } from '../vendor/proton-drive-sdk-account';
 import { Backoff } from './drive/backoff';
 import { DriveTree } from './drive/tree';
 import { acquireStateLock } from './session/lock';
+import type { FileCredentials } from './session/credentials';
 import { connect } from './proton/connect';
 import { createWebDavHandler } from './webdav/handler';
 import { FailedPutGuard, FAILED_PUT_GUARD_MS } from './webdav/guard';
@@ -61,7 +62,12 @@ export async function serveCommand(options: ServeOptions): Promise<number> {
             const server = startServer({
                 host,
                 port,
-                handler: createWebDavHandler({ tree, logger, guard: new FailedPutGuard(FAILED_PUT_GUARD_MS, connection.clock?.now.bind(connection.clock)) }),
+                handler: createWebDavHandler({
+                    tree,
+                    logger,
+                    authProblem: () => authProblem(connection.credentials),
+                    guard: new FailedPutGuard(FAILED_PUT_GUARD_MS, connection.clock?.now.bind(connection.clock)),
+                }),
             });
             logger.info(`Serving Proton Drive ${options.root ? `folder /${options.root}` : 'My files'} at ${server.url.href}`);
             await waitUntil(signal);
@@ -100,4 +106,19 @@ function waitUntil(signal?: AbortSignal): Promise<void> {
 
 export function isLoopback(host: string): boolean {
     return host === 'localhost' || host === '::1' || host.startsWith('127.');
+}
+
+/**
+ * Why Proton calls cannot work right now, or `undefined` when they can. Checked
+ * before each request against the live credentials, so a session Proton refuses
+ * mid-run starts answering 401 without another Drive call.
+ */
+export function authProblem(credentials: FileCredentials): string | undefined {
+    if (credentials.isLoggedIn()) {
+        return undefined;
+    }
+    if (credentials.rejectedAt) {
+        return REFUSED_SESSION(credentials.rejectedAt);
+    }
+    return NOT_SIGNED_IN;
 }

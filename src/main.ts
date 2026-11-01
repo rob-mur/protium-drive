@@ -12,6 +12,7 @@ import { VERSION as SDK_VERSION } from '@protontech/drive-sdk';
 import { authLogin } from './auth/login.ts';
 import { createLogger } from './logger.ts';
 import { resolveStateDir } from './paths.ts';
+import { SessionFileStore } from './session/store.ts';
 import { THIRD_PARTY_NOTICE } from './notice.ts';
 import { serveCommand, DEFAULT_HOST, DEFAULT_PORT } from './serve.ts';
 import { APP_VERSION, VERSION, buildRevision } from './version.ts';
@@ -23,6 +24,7 @@ ${THIRD_PARTY_NOTICE}
 
 Usage:
   proton-drive-mount auth login [--state-dir DIR] [--fake-drive DIR]
+  proton-drive-mount auth status [--state-dir DIR]
   proton-drive-mount serve [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--root PATH] [--state-dir DIR] [--fake-drive DIR]
   proton-drive-mount --version
   proton-drive-mount help
@@ -77,6 +79,32 @@ export interface Output {
 const CONSOLE_OUTPUT: Output = { print: (line) => console.log(line), error: (line) => console.error(line) };
 
 /**
+ * Reports the saved session from the local file only. It never calls Proton,
+ * so it cannot race a running `serve` for the refresh token. It names a session
+ * Proton refused and exits 1; a healthy or missing session also exits 1 only
+ * when there is nothing to use.
+ */
+export async function authStatus(stateDir: string, output: Output = CONSOLE_OUTPUT): Promise<number> {
+    const store = new SessionFileStore(stateDir);
+    const stored = await store.load();
+    output.print(`State directory: ${stateDir}`);
+    if (!stored) {
+        output.print('Not signed in. Run "proton-drive-mount auth login".');
+        return 1;
+    }
+    output.print(`Session file:    ${store.filePath}`);
+    output.print(`Session UID:     ${stored.session.uid.slice(0, 8)}…`);
+    output.print(`Saved at:        ${stored.savedAt} by ${stored.appVersion}`);
+    output.print(`Refresh token:   ${stored.session.refreshToken ? 'present' : 'missing'}`);
+    if (stored.refreshRejectedAt) {
+        output.print(`Status:          Proton refused the session at ${stored.refreshRejectedAt}. Run "auth login" again.`);
+        return 1;
+    }
+    output.print('Status:          signed in (checked locally; this command makes no Proton call)');
+    return 0;
+}
+
+/**
  * Runs one command, including the ones that stream. `auth login` prints as it
  * goes and keeps running until the approval arrives; the identity commands
  * answer in one message.
@@ -110,6 +138,10 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
             print: output.print,
             signal,
         });
+        return { code, stdout: '', stderr: '' };
+    }
+    if (command === 'auth status') {
+        const code = await authStatus(resolveStateDir(values['state-dir'], env), output);
         return { code, stdout: '', stderr: '' };
     }
     if (command === 'serve') {
