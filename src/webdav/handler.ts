@@ -1,12 +1,13 @@
 import type { Logger } from '../../vendor/proton-drive-sdk-account';
 
+import type { ByteRange } from '../drive/download';
 import { DriveError } from '../drive/errors';
 import type { DriveTree } from '../drive/tree';
 import { parsePath } from './paths';
-import { multistatus } from './xml';
+import { etagFor, multistatus } from './xml';
 
 /** The methods this serve answers; the other capabilities grow this as they land. */
-const ALLOW = 'OPTIONS, PROPFIND';
+const ALLOW = 'OPTIONS, PROPFIND, GET, HEAD';
 
 export type HandlerOptions = {
     tree: DriveTree;
@@ -42,6 +43,9 @@ export function createWebDavHandler(options: HandlerOptions): WebDavHandler {
         switch (request.method) {
             case 'PROPFIND':
                 return propfind(request, segments);
+            case 'GET':
+            case 'HEAD':
+                return get(request, segments);
             default:
                 return new Response(`${request.method} is not supported\n`, { status: 405, headers: { Allow: ALLOW } });
         }
@@ -60,6 +64,35 @@ export function createWebDavHandler(options: HandlerOptions): WebDavHandler {
         });
     }
 
+    async function get(request: Request, segments: string[]): Promise<Response> {
+        const entry = await requireEntry(segments);
+        if (entry.kind === 'folder') {
+            return text(405, 'GET on a folder is not supported; use PROPFIND');
+        }
+        const headers: Record<string, string> = {
+            'Accept-Ranges': 'bytes',
+            'Content-Type': entry.mediaType ?? 'application/octet-stream',
+            'Last-Modified': entry.modified.toUTCString(),
+            ETag: etagFor(entry),
+        };
+        const range = parseRange(request.headers.get('Range'), entry.size);
+        if (range === 'unsatisfiable') {
+            return new Response(null, { status: 416, headers: { ...headers, 'Content-Range': `bytes */${entry.size}` } });
+        }
+        const status = range ? 206 : 200;
+        const length = range ? range.end - range.start + 1 : entry.size;
+        headers['Content-Length'] = String(length);
+        if (range) {
+            headers['Content-Range'] = `bytes ${range.start}-${range.end}/${entry.size}`;
+        }
+        // HEAD and empty files need no download, so they take no SDK download slot.
+        if (request.method === 'HEAD' || length === 0) {
+            return new Response(null, { status, headers });
+        }
+        const body = await tree.read(entry, range, request.signal);
+        return new Response(body, { status, headers });
+    }
+
     async function requireEntry(segments: string[]): Promise<NonNullable<Awaited<ReturnType<typeof tree.stat>>>> {
         const entry = await tree.stat(segments);
         if (!entry) {
@@ -67,6 +100,38 @@ export function createWebDavHandler(options: HandlerOptions): WebDavHandler {
         }
         return entry;
     }
+}
+
+/**
+ * Parses a single `bytes=` range. Returns `undefined` for no range or a form
+ * we serve as a full 200 (several ranges, other units), and `'unsatisfiable'`
+ * for a range outside the file.
+ */
+export function parseRange(header: string | null, size: number): ByteRange | 'unsatisfiable' | undefined {
+    if (!header) {
+        return undefined;
+    }
+    const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+    if (!match) {
+        return undefined;
+    }
+    const [, first, last] = match;
+    if (first === '' && last === '') {
+        return undefined;
+    }
+    if (first === '') {
+        const suffix = Number(last);
+        if (suffix === 0 || size === 0) {
+            return 'unsatisfiable';
+        }
+        return { start: Math.max(0, size - suffix), end: size - 1 };
+    }
+    const start = Number(first);
+    const end = last === '' ? size - 1 : Math.min(Number(last), size - 1);
+    if (start >= size || end < start) {
+        return 'unsatisfiable';
+    }
+    return { start, end };
 }
 
 function errorResponse(error: unknown, logger: Logger, what: string): Response {

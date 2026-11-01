@@ -2,7 +2,9 @@ import type { NodeEntity } from '@protontech/drive-sdk';
 
 import type { Logger } from '../../vendor/proton-drive-sdk-account';
 
+import { openDownload, type ByteRange } from './download';
 import { type Entry, isSkipped, toEntry } from './entry';
+import { DriveError } from './errors';
 import type { DriveSdk } from './sdk';
 
 /** One folder's children, by name. */
@@ -52,6 +54,18 @@ export class DriveTree {
 
     async list(folder: Entry): Promise<Entry[]> {
         return [...(await this.listing(folder.uid)).values()];
+    }
+
+    /** Streams a file. `signal` is the client's request; when it aborts, the download stops. */
+    async read(file: Entry, range?: ByteRange, signal?: AbortSignal): Promise<ReadableStream<Uint8Array>> {
+        if (file.kind !== 'file') {
+            throw new DriveError(405, `${file.name} is a folder`);
+        }
+        return openDownload(this.sdk, file, {
+            range,
+            signal,
+            logger: this.logger,
+        });
     }
 
     /** The folder's cached listing, loading it from the SDK on the first ask. */
