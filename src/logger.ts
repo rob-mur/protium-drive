@@ -11,3 +11,19 @@ export function createLogger(env: NodeJS.ProcessEnv = process.env): Logger {
     };
     return { debug: write('debug'), info: write('info'), warn: write('warn'), error: write('error') };
 }
+
+/**
+ * Telemetry for the SDK: logs go to our logger, metrics are dropped (nothing
+ * is sent to Proton).
+ */
+export function createTelemetry(logger: Logger) {
+    return {
+        getLogger: (name: string): Logger => ({
+            debug: (message: string) => logger.debug(`[${name}] ${message}`),
+            info: (message: string) => logger.info(`[${name}] ${message}`),
+            warn: (message: string) => logger.warn(`[${name}] ${message}`),
+            error: (message: string, error?: unknown) => logger.error(`[${name}] ${message}`, error),
+        }),
+        recordMetric: () => {},
+    };
+}

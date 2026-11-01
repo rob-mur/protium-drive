@@ -13,6 +13,7 @@ import { authLogin } from './auth/login.ts';
 import { createLogger } from './logger.ts';
 import { resolveStateDir } from './paths.ts';
 import { THIRD_PARTY_NOTICE } from './notice.ts';
+import { serveCommand, DEFAULT_HOST, DEFAULT_PORT } from './serve.ts';
 import { APP_VERSION, VERSION, buildRevision } from './version.ts';
 
 export { THIRD_PARTY_NOTICE };
@@ -22,6 +23,7 @@ ${THIRD_PARTY_NOTICE}
 
 Usage:
   proton-drive-mount auth login [--state-dir DIR] [--fake-drive DIR]
+  proton-drive-mount serve [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--state-dir DIR] [--fake-drive DIR]
   proton-drive-mount --version
   proton-drive-mount help
 
@@ -29,6 +31,9 @@ Options:
   --state-dir DIR   Where the session file lives.
                     Default: $XDG_STATE_HOME/proton-drive-mount (~/.local/state/proton-drive-mount).
   --fake-drive DIR  Use the fake drive kept in DIR instead of Proton. Nothing reaches Proton.
+  --host HOST       Address for serve to listen on. Default: ${DEFAULT_HOST}. The server has no
+                    authentication of its own; keep it on loopback.
+  --port PORT       Port for serve to listen on. Default: ${DEFAULT_PORT}.
 `;
 
 export function versionAnswer(env: NodeJS.ProcessEnv = process.env): string {
@@ -75,13 +80,15 @@ const CONSOLE_OUTPUT: Output = { print: (line) => console.log(line), error: (lin
  * goes and keeps running until the approval arrives; the identity commands
  * answer in one message.
  */
-export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = process.env, output: Output = CONSOLE_OUTPUT): Promise<Answer> {
+export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = process.env, output: Output = CONSOLE_OUTPUT, signal?: AbortSignal): Promise<Answer> {
     const { values, positionals } = parseArgs({
         args: argv,
         allowPositionals: true,
         options: {
             'state-dir': { type: 'string' },
             'fake-drive': { type: 'string' },
+            host: { type: 'string' },
+            port: { type: 'string' },
             help: { type: 'boolean', short: 'h' },
             version: { type: 'boolean' },
         },
@@ -99,6 +106,22 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
             logger: createLogger(env),
             fakeDriveDir: values['fake-drive'],
             print: output.print,
+            signal,
+        });
+        return { code, stdout: '', stderr: '' };
+    }
+    if (command === 'serve') {
+        const port = Number(values.port ?? DEFAULT_PORT);
+        if (!Number.isInteger(port) || port < 0 || port > 65535) {
+            return { code: 2, stdout: '', stderr: `Bad --port ${values.port}\n` };
+        }
+        const code = await serveCommand({
+            stateDir: resolveStateDir(values['state-dir'], env),
+            host: values.host ?? DEFAULT_HOST,
+            port,
+            logger: createLogger(env),
+            fakeDriveDir: values['fake-drive'],
+            signal,
         });
         return { code, stdout: '', stderr: '' };
     }
@@ -112,10 +135,10 @@ if (import.meta.main) {
     }
     let answer: Answer;
     try {
-        answer = await runCommand(process.argv.slice(2), process.env, CONSOLE_OUTPUT);
+        answer = await runCommand(process.argv.slice(2), process.env, CONSOLE_OUTPUT, abort.signal);
     } catch (error: unknown) {
         if (abort.signal.aborted) {
-            console.error('Signing in was interrupted.');
+            console.error('Interrupted.');
             process.exit(130);
         }
         console.error(error instanceof Error ? error.message : String(error));
