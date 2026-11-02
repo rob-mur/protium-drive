@@ -77,10 +77,7 @@
     {
       "id": "sign-out-removes-the-session",
       "path": "spec/features/session-status.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the binary says Proton keeps the session until it expires, and the state directory holds no \"([^\"]*)\"$"
-      ]
+      "expected_status": "green"
     }
   ]
 }
