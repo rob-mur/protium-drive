@@ -4,34 +4,22 @@
     {
       "id": "a-file-added-elsewhere-shows-after-the-next-events",
       "path": "spec/features/drive-events.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the listing shows exactly:$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-file-trashed-elsewhere-goes-after-the-next-events",
       "path": "spec/features/drive-events.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the listing shows exactly:$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "the-serve-never-walks-the-folder-tree",
       "path": "spec/features/drive-events.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the serve read the Drive's events (\\d+) times, and the Drive listed no folder$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "the-serve-reads-no-events-during-a-rate-limit-pause",
       "path": "spec/features/drive-events.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the listing was refused as rate-limited, and the serve read no events when the scheduler called it$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-drive-server-error-reaches-the-user-as-a-bad-gateway",
