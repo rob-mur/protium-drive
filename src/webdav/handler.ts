@@ -3,6 +3,7 @@ import {
     ConnectionError,
     DecryptionError,
     IntegrityError,
+    NodeWithSameNameExistsValidationError,
     RateLimitedError,
     ServerError,
     ValidationError,
@@ -19,6 +20,9 @@ import { etagFor, multistatus } from './xml';
 
 /** The methods this serve answers; the other capabilities grow this as they land. */
 const ALLOW = 'OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL, MOVE';
+
+/** The `Retry-After` for a Drive that cannot be reached. */
+const UNREACHABLE_RETRY_SECONDS = 10;
 
 export type HandlerOptions = {
     tree: DriveTree;
@@ -295,7 +299,7 @@ function errorResponse(error: unknown, authProblem: string | undefined, tree: Dr
     }
     if (error instanceof ConnectionError) {
         logger.warn(`${what}: Connection error: ${error.message}`);
-        return text(503, `Connection error: ${error.message}`);
+        return text(503, `Connection error: ${error.message}`, { 'Retry-After': String(UNREACHABLE_RETRY_SECONDS) });
     }
     if (error instanceof DecryptionError) {
         logger.error(`${what}: Decryption error: ${error.message}`);
@@ -303,7 +307,10 @@ function errorResponse(error: unknown, authProblem: string | undefined, tree: Dr
     }
     if (error instanceof IntegrityError) {
         logger.error(`${what}: Integrity error: ${error.message}`);
-        return text(500, `Integrity error: ${error.message}`);
+        return text(502, `Integrity error: ${error.message}`);
+    }
+    if (error instanceof NodeWithSameNameExistsValidationError) {
+        return text(409, error.message);
     }
     if (error instanceof ValidationError) {
         return text(400, error.message);
@@ -314,7 +321,8 @@ function errorResponse(error: unknown, authProblem: string | undefined, tree: Dr
         return text(503, `Proton rate limit: ${error.message}`, { 'Retry-After': String(retryAfter) });
     }
     if (error instanceof ServerError) {
-        const status = error.statusCode ?? 500;
+        // A Proton failure (5xx, or none given) is a bad gateway; a 4xx Proton answered is passed on.
+        const status = error.statusCode !== undefined && error.statusCode < 500 ? error.statusCode : 502;
         if (status >= 500) {
             logger.warn(`${what}: Server error: ${error.message}`);
         }

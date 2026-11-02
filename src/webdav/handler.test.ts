@@ -7,6 +7,7 @@ import {
     IntegrityError,
     RateLimitedError,
     ServerError,
+    NodeWithSameNameExistsValidationError,
     ValidationError,
 } from '@protontech/drive-sdk';
 
@@ -769,6 +770,7 @@ describe('error mapping', () => {
         const handle = createWebDavHandler({ tree, logger: QUIET });
         const response = await handle(new Request('http://127.0.0.1/Photos', { method: 'PROPFIND', headers: { Depth: '1' } }));
         expect(response.status).toBe(503);
+        expect(response.headers.get('Retry-After')).toBe('10');
         expect(await response.text()).toContain('Connection error');
     });
 
@@ -780,11 +782,11 @@ describe('error mapping', () => {
         expect(await response.text()).toContain('Decryption error');
     });
 
-    test('IntegrityError maps to 500', async () => {
+    test('IntegrityError maps to 502', async () => {
         const tree = treeWithError(new IntegrityError('Hash mismatch'));
         const handle = createWebDavHandler({ tree, logger: QUIET });
         const response = await handle(new Request('http://127.0.0.1/Photos', { method: 'PROPFIND', headers: { Depth: '1' } }));
-        expect(response.status).toBe(500);
+        expect(response.status).toBe(502);
         expect(await response.text()).toContain('Integrity error');
     });
 
@@ -805,13 +807,28 @@ describe('error mapping', () => {
         expect(await response.text()).toContain('Forbidden');
     });
 
-    test('ServerError without statusCode defaults to 500', async () => {
+    test('ServerError without statusCode is 502', async () => {
         const error = new ServerError('Internal error');
         // statusCode not set
         const tree = treeWithError(error);
         const handle = createWebDavHandler({ tree, logger: QUIET });
         const response = await handle(new Request('http://127.0.0.1/Photos', { method: 'PROPFIND', headers: { Depth: '1' } }));
-        expect(response.status).toBe(500);
+        expect(response.status).toBe(502);
         expect(await response.text()).toContain('Internal error');
+    });
+
+    test('ServerError with a 500 statusCode is 502', async () => {
+        const tree = treeWithError(Object.assign(new ServerError('Internal server error'), { statusCode: 500 }));
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/Photos', { method: 'PROPFIND', headers: { Depth: '1' } }));
+        expect(response.status).toBe(502);
+    });
+
+    test('a name clash maps to 409', async () => {
+        const tree = treeWithError(new NodeWithSameNameExistsValidationError('Name taken', 2500, undefined, false));
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/Photos', { method: 'PROPFIND', headers: { Depth: '1' } }));
+        expect(response.status).toBe(409);
+        expect(await response.text()).toContain('Name taken');
     });
 });
