@@ -1,5 +1,6 @@
 import type { Logger } from '../vendor/proton-drive-sdk-account';
 
+import { EventWatcher } from './drive/events';
 import { Backoff } from './drive/backoff';
 import { DriveTree } from './drive/tree';
 import { acquireStateLock } from './session/lock';
@@ -71,10 +72,17 @@ export async function serveCommand(options: ServeOptions): Promise<number> {
                     guard: new FailedPutGuard(FAILED_PUT_GUARD_MS, connection.clock?.now.bind(connection.clock)),
                 }),
             });
+            const watcher = new EventWatcher(sdk, tree, logger, {
+                authProblem: () => authProblem(connection.credentials),
+                setTimeout: connection.clock?.setTimeout.bind(connection.clock),
+                clearTimeout: connection.clock?.clearTimeout.bind(connection.clock),
+            });
+            await watcher.start();
             logger.info(`Serving Proton Drive ${options.root ? `folder /${options.root}` : 'My files'} at ${server.url.href}`);
             options.onListening?.(server.url);
             await waitUntil(signal);
             logger.info('Stopping');
+            watcher.stop();
             await stop(server);
             return 0;
         } finally {

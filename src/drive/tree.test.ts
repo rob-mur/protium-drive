@@ -959,3 +959,22 @@ describe('DriveTree move', () => {
         });
     });
 });
+
+describe('DriveTree cache drops', () => {
+    test('dropListings and clear make the next ask list the folder again', async () => {
+        const nodes = new Map<string, Node>([
+            ['root', folder('root', 'My files')],
+            ['a', folder('a', 'a', 'root')],
+        ]);
+        const sdk = fakeSdk(nodes);
+        const tree = new DriveTree(sdk as unknown as DriveSdk, { debug() {}, info() {}, warn() {}, error() {} } as never);
+        const root = await tree.root();
+        await tree.list(root);
+        tree.dropListings(['root', undefined]);
+        await tree.list(root);
+        expect(sdk.calls.get('iterateFolderChildrenNodeUids')).toBe(2);
+        tree.clear();
+        await tree.list(root);
+        expect(sdk.calls.get('iterateFolderChildrenNodeUids')).toBe(3);
+    });
+});

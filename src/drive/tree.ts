@@ -269,6 +269,20 @@ export class DriveTree {
         return pending;
     }
 
+    /** Drops the cached listings of these folders, so the next ask loads them anew. */
+    dropListings(folderUids: Iterable<string | undefined>): void {
+        for (const uid of folderUids) {
+            if (uid !== undefined) {
+                this.listings.delete(uid);
+            }
+        }
+    }
+
+    /** Drops every cached listing. */
+    clear(): void {
+        this.listings.clear();
+    }
+
     /** Forgets the cached views a trashed entry takes part in: its own folder, and its parent's. */
     private forget(entry: Entry): void {
         if (entry.parentUid) {
