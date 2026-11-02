@@ -36,34 +36,22 @@
     {
       "id": "a-drive-server-error-reaches-the-user-as-a-bad-gateway",
       "path": "spec/features/error-mapping.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the listing fails as a bad gateway$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-file-that-fails-verification-reaches-the-user-as-a-bad-gateway",
       "path": "spec/features/error-mapping.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the read fails as a bad gateway saying the data failed verification$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "an-unreachable-drive-reaches-the-user-as-unavailable",
       "path": "spec/features/error-mapping.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the listing fails as unavailable, to retry after (\\d+) seconds$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-name-clash-on-upload-reaches-the-user-as-a-conflict",
       "path": "spec/features/error-mapping.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the write fails as a conflict$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "binary-reports-its-revision",
