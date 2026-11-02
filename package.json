@@ -12,7 +12,7 @@
         "start": "bun src/main.ts",
         "test": "bun test",
         "check-types": "tsc --noEmit",
-        "build": "bun build src/main.ts --compile --outfile dist/proton-drive-mount"
+        "build": "bun build src/main.ts src/proton/crypto-worker.ts --compile --outfile dist/proton-drive-mount"
     },
     "dependencies": {
         "@protontech/crypto": "2.0.0",

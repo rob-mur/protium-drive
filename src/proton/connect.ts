@@ -1,7 +1,6 @@
 import path from 'node:path';
 
 import { CryptoProxy } from '@protontech/crypto';
-import { Api as CryptoApi } from '@protontech/crypto/proxy/endpoint/api.ts';
 import { computeKeyPassword, generateKeySalt, getRandomSrpVerifier, getSrp } from '@protontech/crypto/srp';
 import {
     MemoryCache,
@@ -24,6 +23,7 @@ import { APP_VERSION } from '../version';
 import { FileCredentials } from '../session/credentials';
 import { SessionFileStore } from '../session/store';
 import type { DriveSdk } from '../drive/sdk';
+import { initCryptoWorker, stopCryptoWorker } from './crypto-pool';
 
 /** Third-party clients sign in as `external-drive`; `cli-drive` is reserved for Proton's own CLI. */
 export const AUTH_CLIENT_ID = 'external-drive';
@@ -84,7 +84,7 @@ export async function connect(options: {
         }
     }
 
-    initCryptoProxy();
+    initCryptoWorker();
     const sdkVersion = `js@${SDK_VERSION}`;
     const apiClient = new ApiClient({
         baseUrl: DEFAULT_BASE_URL,
@@ -113,18 +113,7 @@ export async function connect(options: {
             openPGPCryptoModule: new OpenPGPCryptoWithCryptoProxy(CryptoProxy),
             telemetry: createTelemetry(logger),
         });
-    return { auth, credentials, createDriveClient, stop: async () => {} };
-}
-
-let cryptoReady = false;
-
-function initCryptoProxy() {
-    if (cryptoReady) {
-        return;
-    }
-    CryptoApi.init({});
-    CryptoProxy.setEndpoint(new CryptoApi(), (endpoint) => endpoint.clearKeyStore());
-    cryptoReady = true;
+    return { auth, credentials, createDriveClient, stop: stopCryptoWorker };
 }
 
 /** Same as the CLI's HTTP client, but with ky retries off: the SDK already retries and backs off on 429. */
