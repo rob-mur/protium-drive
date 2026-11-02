@@ -3,6 +3,7 @@
   stdenvNoCC,
   bun,
   makeWrapper,
+  rclone,
   # The git revision this build was made from; --version names it.
   revision ? "unknown",
 }:
@@ -66,6 +67,7 @@ stdenvNoCC.mkDerivation {
     cp -R package.json tsconfig.json src fake-drive vendor $app/
     ln -s ${nodeModules}/node_modules $app/node_modules
     makeWrapper ${lib.getExe bun} $out/bin/proton-drive-mount \
+      --set PDM_RCLONE ${lib.getExe rclone} \
       --set PDM_BUILD_REVISION ${lib.escapeShellArg revision} \
       --add-flags "$app/src/main.ts"
     runHook postInstall

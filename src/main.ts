@@ -14,6 +14,7 @@ import { createLogger } from './logger.ts';
 import { resolveStateDir } from './paths.ts';
 import { SessionFileStore } from './session/store.ts';
 import { THIRD_PARTY_NOTICE } from './notice.ts';
+import { mountCommand, mountDeps } from './mount.ts';
 import { serveCommand, DEFAULT_HOST, DEFAULT_PORT } from './serve.ts';
 import { APP_VERSION, VERSION, buildRevision } from './version.ts';
 
@@ -27,6 +28,7 @@ Usage:
   proton-drive-mount auth status [--state-dir DIR]
   proton-drive-mount auth logout [--state-dir DIR]
   proton-drive-mount serve [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--root PATH] [--state-dir DIR] [--fake-drive DIR]
+  proton-drive-mount mount MOUNTPOINT [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--root PATH] [--state-dir DIR] [--fake-drive DIR]
   proton-drive-mount --version
   proton-drive-mount help
 
@@ -37,6 +39,8 @@ Options:
   --host HOST       Address for serve to listen on. Default: ${DEFAULT_HOST}. The server has no
                     authentication of its own; keep it on loopback.
   --port PORT       Port for serve to listen on. Default: ${DEFAULT_PORT}.
+  MOUNTPOINT        mount runs the serve and rclone mount, with the tested settings, and mounts
+                    the Drive there. SIGINT or SIGTERM stops both and unmounts.
   --root PATH       Folder inside "My files" to serve as /. Default: all of My files.
 `;
 
@@ -176,6 +180,30 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
             root: values.root,
             signal,
         });
+        return { code, stdout: '', stderr: '' };
+    }
+    if (positionals[0] === 'mount') {
+        const mountpoint = positionals[1];
+        if (positionals.length !== 2 || !mountpoint) {
+            return { code: 2, stdout: '', stderr: `Usage: proton-drive-mount mount MOUNTPOINT [serve options]\n` };
+        }
+        const port = Number(values.port ?? DEFAULT_PORT);
+        if (!Number.isInteger(port) || port < 0 || port > 65535) {
+            return { code: 2, stdout: '', stderr: `Bad --port ${values.port}\n` };
+        }
+        const code = await mountCommand(
+            {
+                mountpoint,
+                stateDir: resolveStateDir(values['state-dir'], env),
+                host: values.host ?? DEFAULT_HOST,
+                port,
+                logger: createLogger(env),
+                fakeDriveDir: values['fake-drive'],
+                root: values.root,
+                signal,
+            },
+            mountDeps(env),
+        );
         return { code, stdout: '', stderr: '' };
     }
     return run(argv, env);

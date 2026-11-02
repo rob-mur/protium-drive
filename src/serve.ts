@@ -30,6 +30,8 @@ export type ServeOptions = {
     root?: string;
     /** Resolves when the serve should stop; SIGINT and SIGTERM resolve it. */
     signal?: AbortSignal;
+    /** Called once the server listens, with the URL it answers on. */
+    onListening?: (url: URL) => void;
 };
 
 /**
@@ -70,6 +72,7 @@ export async function serveCommand(options: ServeOptions): Promise<number> {
                 }),
             });
             logger.info(`Serving Proton Drive ${options.root ? `folder /${options.root}` : 'My files'} at ${server.url.href}`);
+            options.onListening?.(server.url);
             await waitUntil(signal);
             logger.info('Stopping');
             await stop(server);
