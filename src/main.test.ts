@@ -8,7 +8,7 @@ import { VERSION as SDK_VERSION } from '@protontech/drive-sdk';
 
 import { VERSION } from './version.ts';
 
-import { HELP, THIRD_PARTY_NOTICE, run, runCommand, versionAnswer, authStatus } from './main.ts';
+import { HELP, THIRD_PARTY_NOTICE, run, runCommand, versionAnswer, authStatus, authLogout } from './main.ts';
 import { SessionFileStore } from './session/store.ts';
 
 const REV = 'b'.repeat(40);
@@ -238,5 +238,32 @@ describe('auth status', () => {
         });
         expect(answer.code).toBe(0);
         expect(printed.join('\n')).toContain('signed in');
+    });
+
+    test('deletes the session file and says Proton keeps the session until it expires', async () => {
+        const stateDir = mkdtemp('logout');
+        const store = new SessionFileStore(stateDir);
+        await store.save(storedSession());
+        const printed: string[] = [];
+        const code = await authLogout(stateDir, { print: (line) => printed.push(line), error: () => {} });
+        expect(code).toBe(0);
+        expect(await store.load()).toBeNull();
+        expect(printed.join('\n')).toContain('Proton keeps the session until it expires');
+    });
+
+    test('without a session it says so and exits 0', async () => {
+        const printed: string[] = [];
+        const code = await authLogout(mkdtemp('logout-empty'), { print: (line) => printed.push(line), error: () => {} });
+        expect(code).toBe(0);
+        expect(printed.join('\n')).toContain('Not signed in');
+    });
+
+    test('runCommand dispatches auth logout with the state dir', async () => {
+        const stateDir = mkdtemp('logout-dispatch');
+        const store = new SessionFileStore(stateDir);
+        await store.save(storedSession());
+        const answer = await runCommand(['auth', 'logout', '--state-dir', stateDir], {}, CONSOLE_OUTPUT_QUIET);
+        expect(answer.code).toBe(0);
+        expect(await store.load()).toBeNull();
     });
 });

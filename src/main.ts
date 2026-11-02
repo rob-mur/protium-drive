@@ -25,6 +25,7 @@ ${THIRD_PARTY_NOTICE}
 Usage:
   proton-drive-mount auth login [--state-dir DIR] [--fake-drive DIR]
   proton-drive-mount auth status [--state-dir DIR]
+  proton-drive-mount auth logout [--state-dir DIR]
   proton-drive-mount serve [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--root PATH] [--state-dir DIR] [--fake-drive DIR]
   proton-drive-mount --version
   proton-drive-mount help
@@ -105,6 +106,19 @@ export async function authStatus(stateDir: string, output: Output = CONSOLE_OUTP
 }
 
 /**
+ * Deletes the local session file. It never calls Proton, so Proton keeps the
+ * session until it expires or the user revokes it there.
+ */
+export async function authLogout(stateDir: string, output: Output = CONSOLE_OUTPUT): Promise<number> {
+    const removed = await new SessionFileStore(stateDir).remove();
+    output.print(removed ? 'Signed out: the local session file is deleted.' : 'Not signed in: there was no session file to delete.');
+    if (removed) {
+        output.print('Proton keeps the session until it expires; revoke it in your Proton account settings to end it sooner.');
+    }
+    return 0;
+}
+
+/**
  * Runs one command, including the ones that stream. `auth login` prints as it
  * goes and keeps running until the approval arrives; the identity commands
  * answer in one message.
@@ -142,6 +156,10 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
     }
     if (command === 'auth status') {
         const code = await authStatus(resolveStateDir(values['state-dir'], env), output);
+        return { code, stdout: '', stderr: '' };
+    }
+    if (command === 'auth logout') {
+        const code = await authLogout(resolveStateDir(values['state-dir'], env), output);
         return { code, stdout: '', stderr: '' };
     }
     if (command === 'serve') {
