@@ -1,6 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 
-import { RateLimitedError } from '@protontech/drive-sdk';
+import {
+    AbortError,
+    ConnectionError,
+    DecryptionError,
+    IntegrityError,
+    RateLimitedError,
+    ServerError,
+    ValidationError,
+} from '@protontech/drive-sdk';
 
 import { Backoff } from '../drive/backoff.ts';
 import { DriveError } from '../drive/errors.ts';
@@ -734,5 +742,76 @@ describe('MOVE', () => {
         const response = await handle(moveRequest('/beach.jpg', '/Photos/beach.jpg'));
         expect(response.status).toBe(204);
         expect(tree.moves[0]?.result).toBe('not-created');
+    });
+});
+
+describe('error mapping', () => {
+    function treeWithError(error: Error): DriveTree {
+        return {
+            root: async () => ROOT,
+            list: async () => [],
+            stat: async () => {
+                throw error;
+            },
+        } as unknown as DriveTree;
+    }
+
+    test('AbortError maps to 499', async () => {
+        const tree = treeWithError(new AbortError('Client closed the connection'));
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/Photos', { method: 'PROPFIND', headers: { Depth: '1' } }));
+        expect(response.status).toBe(499);
+        expect(await response.text()).toContain('Client closed the connection');
+    });
+
+    test('ConnectionError maps to 503', async () => {
+        const tree = treeWithError(new ConnectionError('Network unavailable'));
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/Photos', { method: 'PROPFIND', headers: { Depth: '1' } }));
+        expect(response.status).toBe(503);
+        expect(await response.text()).toContain('Connection error');
+    });
+
+    test('DecryptionError maps to 500', async () => {
+        const tree = treeWithError(new DecryptionError('Decryption failed'));
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/Photos', { method: 'PROPFIND', headers: { Depth: '1' } }));
+        expect(response.status).toBe(500);
+        expect(await response.text()).toContain('Decryption error');
+    });
+
+    test('IntegrityError maps to 500', async () => {
+        const tree = treeWithError(new IntegrityError('Hash mismatch'));
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/Photos', { method: 'PROPFIND', headers: { Depth: '1' } }));
+        expect(response.status).toBe(500);
+        expect(await response.text()).toContain('Integrity error');
+    });
+
+    test('ValidationError maps to 400', async () => {
+        const tree = treeWithError(new ValidationError('Invalid name', 1001));
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/Photos', { method: 'PROPFIND', headers: { Depth: '1' } }));
+        expect(response.status).toBe(400);
+        expect(await response.text()).toContain('Invalid name');
+    });
+
+    test('ServerError with statusCode uses that status', async () => {
+        const error = Object.assign(new ServerError('Forbidden'), { statusCode: 403 });
+        const tree = treeWithError(error);
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/Photos', { method: 'PROPFIND', headers: { Depth: '1' } }));
+        expect(response.status).toBe(403);
+        expect(await response.text()).toContain('Forbidden');
+    });
+
+    test('ServerError without statusCode defaults to 500', async () => {
+        const error = new ServerError('Internal error');
+        // statusCode not set
+        const tree = treeWithError(error);
+        const handle = createWebDavHandler({ tree, logger: QUIET });
+        const response = await handle(new Request('http://127.0.0.1/Photos', { method: 'PROPFIND', headers: { Depth: '1' } }));
+        expect(response.status).toBe(500);
+        expect(await response.text()).toContain('Internal error');
     });
 });

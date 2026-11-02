@@ -1,4 +1,12 @@
-import { RateLimitedError } from '@protontech/drive-sdk';
+import {
+    AbortError,
+    ConnectionError,
+    DecryptionError,
+    IntegrityError,
+    RateLimitedError,
+    ServerError,
+    ValidationError,
+} from '@protontech/drive-sdk';
 
 import type { Logger } from '../../vendor/proton-drive-sdk-account';
 
@@ -282,10 +290,35 @@ function errorResponse(error: unknown, authProblem: string | undefined, tree: Dr
     if (authProblem) {
         return text(401, authProblem);
     }
+    if (error instanceof AbortError) {
+        return text(499, error.message);
+    }
+    if (error instanceof ConnectionError) {
+        logger.warn(`${what}: Connection error: ${error.message}`);
+        return text(503, `Connection error: ${error.message}`);
+    }
+    if (error instanceof DecryptionError) {
+        logger.error(`${what}: Decryption error: ${error.message}`);
+        return text(500, `Decryption error: ${error.message}`);
+    }
+    if (error instanceof IntegrityError) {
+        logger.error(`${what}: Integrity error: ${error.message}`);
+        return text(500, `Integrity error: ${error.message}`);
+    }
+    if (error instanceof ValidationError) {
+        return text(400, error.message);
+    }
     if (error instanceof RateLimitedError) {
         logger.warn(`${what}: Proton rate limit: ${error.message}`);
         const retryAfter = Math.max(tree.backoff.coolingDownSeconds, 1);
         return text(503, `Proton rate limit: ${error.message}`, { 'Retry-After': String(retryAfter) });
+    }
+    if (error instanceof ServerError) {
+        const status = error.statusCode ?? 500;
+        if (status >= 500) {
+            logger.warn(`${what}: Server error: ${error.message}`);
+        }
+        return text(status, error.message);
     }
     logger.error(`${what}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
     return text(500, error instanceof Error ? error.message : String(error));
