@@ -1,7 +1,5 @@
 {
   pkgs,
-  config,
-  lib,
   ...
 }:
 
@@ -17,24 +15,9 @@
     pkgs.skopeo
   ];
 
-  # Copied from rob/continuous-delivery's devenv.nix at the pinned `stable`, as the adoption
-  # contract's copy table requires for acknowledgement-gate.yml. This project enables no
-  # language module and no git hook, so the block keeps only what the gate's shell needs.
-  profiles.acknowledgement-gate.module = {
-    stdenv = lib.mkForce pkgs.stdenvNoCC;
-    packages = lib.mkForce [
-      config.cd-pipeline.builtins
-      pkgs.coreutils
-      pkgs.curl
-      pkgs.gawk
-      pkgs.gitMinimal
-      pkgs.gnugrep
-      pkgs.gnused
-      pkgs.jq
-    ];
-  };
-
   cd-pipeline = {
+    typescript.enable = true;
+
     servingCheck = ''
       exec tasks/consumer-instance.sh "$CD_SERVING_REV" "$CD_SERVING_BRANCH"
     '';
