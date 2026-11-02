@@ -4,6 +4,9 @@
   "workspaces": {
     "": {
       "name": "proton-drive-mount-spec",
+      "dependencies": {
+        "@cd-pipeline/support": "file:../.devenv/cd-pipeline/typescript",
+      },
       "devDependencies": {
         "@cucumber/cucumber": "13.3.0",
         "@types/bun": "1.4.4",
@@ -15,6 +18,8 @@
     "@babel/code-frame": ["@babel/code-frame@7.29.7", "", { "dependencies": { "@babel/helper-validator-identifier": "^7.29.7", "js-tokens": "^4.0.0", "picocolors": "^1.1.1" } }, "sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw=="],
 
     "@babel/helper-validator-identifier": ["@babel/helper-validator-identifier@7.29.7", "", {}, "sha512-qehxGkRj55h/ff8EMaJ+cYhyaKlHIxqYDn682wQD7RNp9UujOQsHog2uS0r2vzr4pW+sXf90NeeayjcNaX3fFg=="],
+
+    "@cd-pipeline/support": ["@cd-pipeline/support@file:../.devenv/cd-pipeline/typescript", {}],
 
     "@colors/colors": ["@colors/colors@1.5.0", "", {}, "sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ=="],
 

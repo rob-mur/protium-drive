@@ -5,10 +5,47 @@
 import { spawnSync } from "node:child_process";
 import { accessSync, constants } from "node:fs";
 
+import { type Running, start } from "@cd-pipeline/support";
+
+export type { Running } from "@cd-pipeline/support";
+
 export interface Answer {
   exitCode: number;
   stdout: string;
   stderr: string;
+}
+
+/** Where a run of the binary keeps its home, so no run reads or writes the user's own. */
+export interface Home {
+  /** `HOME`, and the base of every XDG directory. */
+  home: string;
+}
+
+/**
+ * The environment of every run of the binary: the suite's own, a home of the scenario's, and a
+ * proxy that refuses every connection. The suite never reaches Proton: under `--fake-drive` the
+ * binary makes no request of its own, and a command that runs without the switch and tries one
+ * meets the refusing proxy rather than Proton.
+ */
+function environment(home: Home | undefined): NodeJS.ProcessEnv {
+  const refused = "http://127.0.0.1:9";
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HTTP_PROXY: refused,
+    HTTPS_PROXY: refused,
+    http_proxy: refused,
+    https_proxy: refused,
+    NO_PROXY: "",
+    no_proxy: "",
+  };
+  if (home) {
+    env.HOME = home.home;
+    env.XDG_STATE_HOME = `${home.home}/.local/state`;
+    env.XDG_CONFIG_HOME = `${home.home}/.config`;
+    env.XDG_CACHE_HOME = `${home.home}/.cache`;
+    env.XDG_DATA_HOME = `${home.home}/.local/share`;
+  }
+  return env;
 }
 
 export class Binary {
@@ -42,9 +79,20 @@ export class Binary {
     }
   }
 
-  run(args: string[]): Answer {
-    const result = spawnSync(this.path, args, { encoding: "utf8", timeout: 30_000 });
+  /** Runs a command that ends on its own, and waits up to 30 s for it. */
+  run(args: string[], home?: Home): Answer {
+    const result = spawnSync(this.path, args, { encoding: "utf8", timeout: 30_000, env: environment(home) });
     if (result.error) throw result.error;
     return { exitCode: result.status ?? -1, stdout: result.stdout, stderr: result.stderr };
   }
+
+  /** Starts a command that runs until it is stopped, such as `serve`. */
+  start(args: string[], home?: Home): Running {
+    return start(this.path, args, { env: environment(home) });
+  }
+}
+
+/** Indents every line of `text`, for a failure message. */
+export function indent(text: string): string {
+  return text.replace(/^/gm, "    ");
 }

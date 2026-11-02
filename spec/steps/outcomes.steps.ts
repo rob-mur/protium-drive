@@ -1,0 +1,75 @@
+// The Thens about what the user saw: listings, reads, refusals, the serve itself and the mount,
+// with what the Drive counted while the user looked.
+import { type DataTable, Then } from "@cucumber/cucumber";
+
+import type { CallCounts } from "../support/send/control.ts";
+import { claim, decode, last, refusedWith, type Row, says, showsExactly, sum } from "./claims.ts";
+import type { DriveWorld } from "./world.ts";
+
+function method(calls: CallCounts | undefined, name: string): number {
+  return calls?.methods[name] ?? 0;
+}
+
+// --- listings -----------------------------------------------------------------------------------
+
+Then(/^the listing shows exactly:$/, function (this: DriveWorld, table: DataTable) {
+  showsExactly(this, last(this, "list"), table.hashes() as unknown as Row[]);
+});
+
+// --- the Drive's failures -----------------------------------------------------------------------
+
+Then(/^the listing fails as a bad gateway$/, function (this: DriveWorld) {
+  refusedWith(this, last(this, "list"), "PROPFIND", 502);
+});
+
+Then(/^the read fails as a bad gateway saying the data failed verification$/, function (this: DriveWorld) {
+  const read = last(this, "read");
+  refusedWith(this, read, "GET", 502);
+  says(read, "failed verification");
+});
+
+Then(/^the listing fails as unavailable, to retry after (\d+) seconds$/, function (this: DriveWorld, seconds: string) {
+  refusedWith(this, last(this, "list"), "PROPFIND", 503, Number(seconds));
+});
+
+Then(/^the write fails as a conflict$/, function (this: DriveWorld) {
+  refusedWith(this, last(this, "write"), "PUT", 409);
+});
+
+// --- the Drive's events -------------------------------------------------------------------------
+
+Then(/^the serve read the Drive's events (\d+) times, and the Drive listed no folder$/, function (this: DriveWorld, times: string) {
+  const reads = this.eventReads;
+  claim(reads.length === Number(times), () => `the scheduler was polled ${reads.length} times, not ${times}.\n${this.whatHappened()}`);
+  const unasked = reads.findIndex((read) => !read.scopes?.length);
+  claim(unasked < 0, () => `poll ${unasked + 1} found no event scheduler the serve asked for.\n${this.whatHappened()}`);
+  const calls = reads.at(-1)!.callsAfter;
+  claim(calls, () => `the Drive's calls could not be read.\n${this.whatHappened()}`);
+  claim(method(calls, "iterateEvents") >= Number(times), () => `the serve read the Drive's events ${method(calls, "iterateEvents")} times, not ${times}`);
+  claim(sum(calls.listings) === 0, () => `the Drive listed ${sum(calls.listings)} folder(s): ${JSON.stringify(calls.listings)}`);
+});
+
+Then(/^the listing was refused as rate-limited, and the serve read no events when the scheduler called it$/, function (this: DriveWorld) {
+  refusedWith(this, last(this, "list"), "PROPFIND", 503);
+  const read = this.eventReads.at(-1);
+  claim(read?.scopes?.length, () => `the scheduler found no event scheduler the serve asked for to call.\n${this.whatHappened()}`);
+  claim(read.callsBefore && read.callsAfter, () => `the Drive's calls could not be read.\n${this.whatHappened()}`);
+  const readEvents = method(read.callsAfter, "iterateEvents") - method(read.callsBefore, "iterateEvents");
+  claim(readEvents === 0, () => `the serve read the Drive's events ${readEvents} time(s) during the pause`);
+});
+
+// --- the mount ----------------------------------------------------------------------------------
+
+Then(
+  /^the mounted file holds "([^"]*)", and the mounted folder "([^"]*)" holds exactly "([^"]*)"$/,
+  function (this: DriveWorld, text: string, folder: string, names: string) {
+    const read = this.mountedRead;
+    claim(read, () => `nothing was read through the mount.\n${this.whatHappened()}`);
+    claim(read.file.exitCode === 0, () => `reading the mounted file failed (${read.file.command}): ${read.file.stderr}\n${this.whatHappened()}`);
+    claim(decode(read.file.stdout) === text, () => `the mounted file holds "${decode(read.file.stdout)}", not "${text}"`);
+    claim(read.folder.exitCode === 0, () => `listing the mounted folder "${folder}" failed (${read.folder.command}): ${read.folder.stderr}`);
+    const listed = decode(read.folder.stdout).split("\n").filter(Boolean).sort();
+    const want = names.split(", ").sort();
+    claim(JSON.stringify(listed) === JSON.stringify(want), () => `the mounted folder "${folder}" holds ${JSON.stringify(listed)}, not ${JSON.stringify(want)}`);
+  },
+);

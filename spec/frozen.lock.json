@@ -2,9 +2,97 @@
   "version": 1,
   "scenarios": [
     {
+      "id": "a-file-added-elsewhere-shows-after-the-next-events",
+      "path": "spec/features/drive-events.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the listing shows exactly:$"
+      ]
+    },
+    {
+      "id": "a-file-trashed-elsewhere-goes-after-the-next-events",
+      "path": "spec/features/drive-events.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the listing shows exactly:$"
+      ]
+    },
+    {
+      "id": "the-serve-never-walks-the-folder-tree",
+      "path": "spec/features/drive-events.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the serve read the Drive's events (\\d+) times, and the Drive listed no folder$"
+      ]
+    },
+    {
+      "id": "the-serve-reads-no-events-during-a-rate-limit-pause",
+      "path": "spec/features/drive-events.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the listing was refused as rate-limited, and the serve read no events when the scheduler called it$"
+      ]
+    },
+    {
+      "id": "a-drive-server-error-reaches-the-user-as-a-bad-gateway",
+      "path": "spec/features/error-mapping.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the listing fails as a bad gateway$"
+      ]
+    },
+    {
+      "id": "a-file-that-fails-verification-reaches-the-user-as-a-bad-gateway",
+      "path": "spec/features/error-mapping.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the read fails as a bad gateway saying the data failed verification$"
+      ]
+    },
+    {
+      "id": "an-unreachable-drive-reaches-the-user-as-unavailable",
+      "path": "spec/features/error-mapping.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the listing fails as unavailable, to retry after (\\d+) seconds$"
+      ]
+    },
+    {
+      "id": "a-name-clash-on-upload-reaches-the-user-as-a-conflict",
+      "path": "spec/features/error-mapping.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the write fails as a conflict$"
+      ]
+    },
+    {
       "id": "binary-reports-its-revision",
       "path": "spec/features/identity.feature",
       "expected_status": "green"
+    },
+    {
+      "id": "the-mount-shows-drive-files-as-files",
+      "path": "spec/features/mount.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the mounted file holds \"([^\"]*)\", and the mounted folder \"([^\"]*)\" holds exactly \"([^\"]*)\"$"
+      ]
+    },
+    {
+      "id": "a-file-written-through-the-mount-reaches-the-drive",
+      "path": "spec/features/mount.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^within (\\d+) seconds the Drive holds \"([^\"]*)\" containing \"([^\"]*)\"$"
+      ]
+    },
+    {
+      "id": "sign-out-removes-the-session",
+      "path": "spec/features/session-status.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the binary says Proton keeps the session until it expires, and the state directory holds no \"([^\"]*)\"$"
+      ]
     }
   ]
 }
