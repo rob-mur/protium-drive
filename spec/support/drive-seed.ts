@@ -18,6 +18,10 @@ export interface SeedFile {
   clearTextSize?: boolean;
   /** In the trash, not in My files. */
   trashed?: boolean;
+  /** The node key the file holds; v4 when not given (fake-drive/node-keys.ts). */
+  nodeKey?: "v4" | "argon2";
+  /** The modification time the file's client claimed, ISO 8601. */
+  claimedModificationTime?: string;
 }
 
 interface NodeRecord {
@@ -31,11 +35,14 @@ interface NodeRecord {
   revisions: RevisionRecord[];
   nameUndecryptable?: boolean;
   clearTextSize?: boolean;
+  nodeKey?: "v4" | "argon2";
+  claimedModificationTime?: string;
 }
 
 interface RevisionRecord {
   uid: string;
   created: string;
+  claimedModificationTime?: string;
   blob: string;
   size: number;
   declaredSize: number | null;
@@ -114,6 +121,11 @@ export class DriveSeed {
       if (file.trashed) node.trashed = now;
       if (file.nameUndecryptable !== undefined) node.nameUndecryptable = file.nameUndecryptable;
       if (file.clearTextSize !== undefined) node.clearTextSize = file.clearTextSize;
+      if (file.nodeKey !== undefined) node.nodeKey = file.nodeKey;
+      if (file.claimedModificationTime !== undefined) {
+        node.claimedModificationTime = file.claimedModificationTime;
+        node.revisions[0]!.claimedModificationTime = file.claimedModificationTime;
+      }
       nodes[uid] = node;
       uids.set(path, uid);
     }

@@ -16,6 +16,7 @@ import {
 } from '@protontech/drive-sdk';
 
 import { FakeDrive, FakeDriveClient, NoSuchNodeError, SCOPE_ID } from './drive.ts';
+import { armoredNodeKey } from './node-keys.ts';
 
 let dir: string;
 let drive: FakeDrive;
@@ -277,6 +278,34 @@ describe('My files', () => {
         expect(() => drive.add('Docs', { type: 'file', content: bytes('a') })).toThrow(ValidationError);
         expect(drive.nodeAt('Docs')).toMatchObject({ type: 'folder', revisionCount: 0 });
         expect(await events(since)).toEqual([]);
+    });
+
+    test('a file holds a v4 node key unless another client adds it with an Argon2-locked one; a folder holds none', async () => {
+        drive.add('Photos', { type: 'folder' });
+        drive.add('Photos/old.jpg', { type: 'file', content: bytes('a'), nodeKey: 'argon2' });
+        drive.add('Photos/new.jpg', { type: 'file', content: bytes('b'), nodeKey: 'v4' });
+        drive.add('Photos/plain.jpg', { type: 'file', content: bytes('c') });
+        const uploaded = await upload(drive.nodeAt('Photos').uid, 'sdk.jpg', 'd');
+
+        expect(drive.nodeAt('Photos/old.jpg')).toMatchObject({ nodeKey: 'argon2', nodeKeyVersion: 6 });
+        expect(drive.nodeAt('Photos/new.jpg')).toMatchObject({ nodeKey: 'v4', nodeKeyVersion: 4 });
+        expect(drive.nodeAt('Photos/plain.jpg').nodeKeyVersion).toBe(4);
+        expect(drive.nodeAt('Photos/sdk.jpg')).toMatchObject({ uid: uploaded, nodeKeyVersion: 4 });
+        expect(drive.nodeAt('Photos').nodeKeyVersion).toBeUndefined();
+    });
+
+    test('a file entity gives its node key as encryptedCrypto.armoredKey, and a folder gives none', async () => {
+        drive.add('Photos', { type: 'folder' });
+        drive.add('Photos/old.jpg', { type: 'file', content: bytes('a'), nodeKey: 'argon2' });
+        drive.add('Photos/new.jpg', { type: 'file', content: bytes('b') });
+
+        const armored = async (path: string) => {
+            const node = (await client.getNode(drive.nodeAt(path).uid)) as unknown as { encryptedCrypto?: { armoredKey: string } };
+            return node.encryptedCrypto?.armoredKey;
+        };
+        expect(await armored('Photos/old.jpg')).toBe(armoredNodeKey('argon2'));
+        expect(await armored('Photos/new.jpg')).toBe(armoredNodeKey('v4'));
+        expect(await armored('Photos')).toBeUndefined();
     });
 
     test('a trash of the root is refused, by another client and through the SDK surface', async () => {

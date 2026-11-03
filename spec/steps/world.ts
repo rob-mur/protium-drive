@@ -104,6 +104,8 @@ export class DriveWorld extends World {
   wholeTree?: { answer: RawAnswer; callsBefore?: CallCounts; callsAfter?: CallCounts };
   mountedRead?: { file: MountOutcome; folder: MountOutcome };
   mountedWrite?: MountOutcome;
+  /** The `migrate-node-keys` run a When made. */
+  migration?: { path: string; answer: Answer };
   /** What went wrong while acting, for the Then's failure message. */
   readonly troubles: string[] = [];
 
@@ -260,6 +262,16 @@ export class DriveWorld extends World {
     serve.control = Control.fromOutput(running.output);
     await this.setFaults(serve);
     return serve;
+  }
+
+  /**
+   * Runs `migrate-node-keys` on the Drive under `path`. Starts the serve first, so the Thens have
+   * a control channel to read the Drive through; the command and the serve share the Drive.
+   */
+  async migrateNodeKeys(path: string): Promise<void> {
+    await this.ensureServing();
+    const answer = this.runBinary(["migrate-node-keys", path, "--state-dir", this.dirs.state, "--fake-drive", this.dirs.drive]);
+    this.migration = { path, answer };
   }
 
   async startServe(host?: string): Promise<void> {
@@ -491,6 +503,7 @@ export class DriveWorld extends World {
     if (this.serve) lines.push(`  the serve: ${this.serve.process.describe()}`);
     if (this.secondServe) lines.push(`  the second serve: ${this.secondServe.describe()}`);
     if (this.mount) lines.push(`  the mount: ${this.mount.process.describe()}`);
+    if (this.migration) lines.push(indent(`migrating the node keys under ${this.migration.path}: exited ${this.migration.answer.exitCode}\n${this.migration.answer.stdout}${this.migration.answer.stderr}`.trimEnd()));
     for (const action of this.actions) lines.push(indent(`${action.kind} ${action.path}: ${describeOutcome(action.outcome)}`));
     for (const trouble of this.troubles) lines.push(`  trouble: ${trouble}`);
     return lines.join("\n");

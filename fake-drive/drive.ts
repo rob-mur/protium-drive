@@ -48,6 +48,7 @@ import {
 
 import { type Clock, FakeClock, type TimerHandle } from './clock.ts';
 import { type Fault, faultError, type Faults, type Operation } from './faults.ts';
+import { armoredNodeKey, type NodeKeyKind, nodeKeyVersion } from './node-keys.ts';
 import { StateFile } from './state-file.ts';
 
 /** The part of `ProtonDriveClient` the product uses: the prototype's `DriveSdk` pick. */
@@ -104,6 +105,8 @@ export type NodeRecord = {
     nameUndecryptable?: boolean;
     /** False: the SDK gives no clear-text size (`claimedSize`) for this file. */
     clearTextSize?: boolean;
+    /** The node key this file holds (node-keys.ts). A file with none given, and any file the SDK uploads, holds a `v4` key. */
+    nodeKey?: NodeKeyKind;
 };
 
 export type RevisionRecord = {
@@ -118,13 +121,19 @@ export type RevisionRecord = {
     claimedModificationTime?: string;
 };
 
-export type NodeInfo = Omit<NodeRecord, 'revisions'> & { path: string; mediaType?: string; revisionCount: number };
+export type NodeInfo = Omit<NodeRecord, 'revisions'> & {
+    path: string;
+    mediaType?: string;
+    revisionCount: number;
+    /** The OpenPGP version (4 or 6) of a file's node key, read from the key itself. A folder has none. */
+    nodeKeyVersion?: number;
+};
 export type RevisionInfo = Omit<RevisionRecord, 'blob'> & { state: 'active' | 'superseded' };
 
 /** What another client adds at a path. */
 export type AddSpec =
     | { type: 'folder' }
-    | { type: 'file'; content: Uint8Array; mediaType?: string; nameUndecryptable?: boolean; clearTextSize?: boolean };
+    | { type: 'file'; content: Uint8Array; mediaType?: string; nameUndecryptable?: boolean; clearTextSize?: boolean; nodeKey?: NodeKeyKind };
 
 /**
  * The calls the product made through one `FakeDriveClient`, kept in memory, not in `DIR`. A
@@ -257,6 +266,7 @@ export class FakeDrive {
             }
             if (spec.nameUndecryptable !== undefined) node.nameUndecryptable = spec.nameUndecryptable;
             if (spec.clearTextSize !== undefined) node.clearTextSize = spec.clearTextSize;
+            if (spec.nodeKey !== undefined) node.nodeKey = spec.nodeKey;
             this.emit(existing ? DriveEventType.NodeUpdated : DriveEventType.NodeCreated, node);
             return node.uid;
         });
@@ -430,7 +440,13 @@ export class FakeDrive {
 
     private info(node: NodeRecord): NodeInfo {
         const { revisions, ...rest } = node;
-        return { ...rest, path: this.pathOf(node), mediaType: revisions.at(-1)?.mediaType, revisionCount: revisions.length };
+        return {
+            ...rest,
+            path: this.pathOf(node),
+            mediaType: revisions.at(-1)?.mediaType,
+            revisionCount: revisions.length,
+            nodeKeyVersion: node.type === 'file' ? nodeKeyVersion(armoredNodeKey(node.nodeKey)) : undefined,
+        };
     }
 
     private childByName(parentUid: string, name: string): NodeRecord | undefined {
@@ -690,6 +706,11 @@ export class FakeDriveClient implements SdkSurface {
         return node;
     }
 
+    /**
+     * A file's `encryptedCrypto.armoredKey` is its node key, armored. The SDK's own nodes hold it
+     * (`EncryptedNode.encryptedCrypto`) and its public `NodeEntity` leaves it out, so a product that
+     * reads the key without unlocking it does so through a patch of the SDK that passes it on.
+     */
     private entity(uid: string): NodeEntity {
         const node = this.requireRecord(uid);
         const author = { ok: true as const, value: OWNER };
@@ -727,6 +748,7 @@ export class FakeDriveClient implements SdkSurface {
                     ? { isImported: false, claimedModificationTime: node.claimedModificationTime ? new Date(node.claimedModificationTime) : undefined }
                     : undefined,
             treeEventScopeId: SCOPE_ID,
+            ...(node.type === 'file' ? { encryptedCrypto: { armoredKey: armoredNodeKey(node.nodeKey) } } : {}),
         };
     }
 }

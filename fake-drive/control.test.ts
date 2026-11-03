@@ -80,6 +80,17 @@ describe('the control channel', () => {
         expect(await json(get(`/node${query('Empty')}`))).toMatchObject({ type: 'folder', revisionCount: 0 });
     });
 
+    test('adds a file with an Argon2-locked or a v4 node key, and reads the key’s version back', async () => {
+        await json(post('/add', { path: 'Photos/old.jpg', type: 'file', content: 'a', nodeKey: 'argon2' }));
+        await json(post('/add', { path: 'Photos/new.jpg', type: 'file', content: 'b', nodeKey: 'v4' }));
+        await json(post('/add', { path: 'Photos/plain.jpg', type: 'file', content: 'c' }));
+
+        expect(await json(get(`/node${query('Photos/old.jpg')}`))).toMatchObject({ nodeKey: 'argon2', nodeKeyVersion: 6 });
+        expect(await json(get(`/node${query('Photos/new.jpg')}`))).toMatchObject({ nodeKey: 'v4', nodeKeyVersion: 4 });
+        expect(await json(get(`/node${query('Photos/plain.jpg')}`))).toMatchObject({ nodeKeyVersion: 4 });
+        expect((await post('/add', { path: 'Photos/odd.jpg', type: 'file', content: 'x', nodeKey: 'v5' })).status).toBe(400);
+    });
+
     test('renames and trashes as another client, reads the trash, and fires the event scheduler', async () => {
         const polls: DriveEvent[][] = [];
         let lastEventId: string | undefined;

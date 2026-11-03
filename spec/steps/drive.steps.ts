@@ -11,6 +11,23 @@ Given(/^(?:a Drive whose|the Drive's) My files holds the file "([^"]*)" containi
   this.seed.file(path, { content: text(content) });
 });
 
+// The modification time the arranged files' client claimed: the migration is to keep it.
+export const CLAIMED_MODIFICATION_TIME = "2026-08-14T09:30:00.000Z";
+
+Given(
+  /^(?:a Drive whose|the Drive's) My files holds the file "([^"]*)" containing "([^"]*)" with an Argon2-locked node key$/,
+  function (this: DriveWorld, path: string, content: string) {
+    this.seed.file(path, { content: text(content), nodeKey: "argon2", claimedModificationTime: CLAIMED_MODIFICATION_TIME });
+  },
+);
+
+Given(
+  /^(?:a Drive whose|the Drive's) My files holds the file "([^"]*)" containing "([^"]*)" with a v4 node key$/,
+  function (this: DriveWorld, path: string, content: string) {
+    this.seed.file(path, { content: text(content), nodeKey: "v4", claimedModificationTime: CLAIMED_MODIFICATION_TIME });
+  },
+);
+
 Given(/^(?:a Drive whose|the Drive's) My files holds the folder "([^"]*)"$/, function (this: DriveWorld, path: string) {
   this.seed.folder(path);
 });

@@ -9,7 +9,8 @@
  *   GET  /trash                        the trashed nodes (NodeInfo[])
  *   GET  /calls                        the SDK call counts (CallCounts)
  *   POST /add      {path, type: "file" | "folder", content? | contentBase64?, mediaType?,
- *                   nameUndecryptable?, clearTextSize?}       -> {uid}
+ *                   nameUndecryptable?, clearTextSize?, nodeKey?}   -> {uid}
+ *                   nodeKey is "v4" (the default) or "argon2" (node-keys.ts)
  *   POST /rename   {path, name}                               -> {uid}
  *   POST /trash    {path}                                     -> {uid}
  *   POST /events/fire                                         -> {scopes}: polls the event scheduler
@@ -35,6 +36,7 @@ import type { FakeAccount } from './account.ts';
 import type { FakeClock } from './clock.ts';
 import { type AddSpec, type FakeDrive, type FakeDriveClient, NoSuchNodeError } from './drive.ts';
 import { type Fault, FaultError, type Faults } from './faults.ts';
+import type { NodeKeyKind } from './node-keys.ts';
 
 export type ControlChannel = {
     /** `http://127.0.0.1:<port>/` */
@@ -197,7 +199,14 @@ function addSpec(body: Record<string, unknown>): AddSpec {
         mediaType: body.mediaType,
         nameUndecryptable: flag(body, 'nameUndecryptable'),
         clearTextSize: flag(body, 'clearTextSize'),
+        nodeKey: nodeKey(body),
     };
+}
+
+function nodeKey(body: Record<string, unknown>): NodeKeyKind | undefined {
+    const value = body.nodeKey;
+    if (value !== undefined && value !== 'v4' && value !== 'argon2') throw new BadRequest('nodeKey is not "v4" or "argon2"');
+    return value;
 }
 
 function fromBase64(text: string): Uint8Array {

@@ -22,6 +22,8 @@ export interface NodeInfo {
   path: string;
   mediaType?: string;
   revisionCount: number;
+  /** The OpenPGP version of a file's node key (4 or 6). */
+  nodeKeyVersion?: number;
 }
 
 /** One revision of a file (`RevisionInfo` in fake-drive/drive.ts). */

@@ -24,6 +24,12 @@ When(/^the user writes "([^"]*)" to "([^"]*)"$/, async function (this: DriveWorl
   await this.write(path, content);
 });
 
+// --- the migration -------------------------------------------------------------------------
+
+When(/^the user migrates the node keys under "([^"]*)"$/, async function (this: DriveWorld, path: string) {
+  await this.migrateNodeKeys(path);
+});
+
 // --- the rest of the world ------------------------------------------------------------------
 
 When(/^another client adds the file "([^"]*)" containing "([^"]*)"$/, async function (this: DriveWorld, path: string, content: string) {
