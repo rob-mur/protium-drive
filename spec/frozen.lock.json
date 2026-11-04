@@ -70,10 +70,7 @@
     {
       "id": "migrating-a-folder-gives-its-files-v4-node-keys",
       "path": "spec/features/argon2-node-keys.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^\"([^\"]*)\" contains \"([^\"]*)\", has a v4 node key and keeps its modification time$"
-      ]
+      "expected_status": "green"
     }
   ]
 }
