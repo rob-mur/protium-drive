@@ -481,6 +481,7 @@ export class FakeDrive {
             mediaType: content.mediaType,
             claimedModificationTime: content.modificationTime?.toISOString(),
         });
+        if (content.modificationTime) node.claimedModificationTime = content.modificationTime.toISOString();
         node.modified = now;
     }
 

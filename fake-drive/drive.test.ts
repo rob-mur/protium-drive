@@ -351,6 +351,18 @@ describe('My files', () => {
         await expect(controller.completion()).rejects.toBeInstanceOf(IntegrityError);
     });
 
+    test('a file node keeps the claimed time of its upload, as its revision does, and a later upload without one leaves it', async () => {
+        const root = await client.getMyFilesRootFolder();
+        const claimed = new Date('2001-02-03T04:05:06.000Z');
+        const uploader = await client.getFileUploader(root, 'a.txt', { mediaType: 'text/plain', expectedSize: 1, modificationTime: claimed });
+        const { nodeUid: uid } = await (await uploader.uploadFromStream(new Blob(['a']).stream(), [])).completion();
+        expect(drive.record(uid)?.claimedModificationTime).toBe(claimed.toISOString());
+        expect(drive.record(uid)?.revisions.at(-1)?.claimedModificationTime).toBe(claimed.toISOString());
+
+        await overwrite(uid, 'b');
+        expect(drive.record(uid)?.claimedModificationTime).toBe(claimed.toISOString());
+    });
+
     test('a revision upload adds a revision and keeps the old one readable', async () => {
         const root = await client.getMyFilesRootFolder();
         const uid = await upload(root.uid, 'a.txt', 'first');
