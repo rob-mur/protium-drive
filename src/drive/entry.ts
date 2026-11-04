@@ -16,6 +16,8 @@ export type Entry = {
     /** UID of the folder that holds this node; missing for a root folder. */
     parentUid?: string;
     treeEventScopeId: string;
+    /** A file's node key, armored and still locked; `migrate-node-keys` reads its version and lock from it. */
+    armoredNodeKey?: string;
 };
 
 export type Skipped = { skipped: string };
@@ -57,6 +59,7 @@ export function toEntry(node: NodeEntity): Entry | Skipped {
         mediaType: node.mediaType,
         sha1: revision.claimedDigests?.sha1,
         revisionUid: revision.uid,
+        armoredNodeKey: node.encryptedCrypto?.armoredKey,
     };
 }
 

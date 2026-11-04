@@ -48,6 +48,13 @@ describe('toEntry', () => {
         });
     });
 
+    test('a file carries its armored node key; a folder and a file without one carry none', () => {
+        const file = { type: NodeType.File, activeRevision: { uid: 'r', claimedSize: 1 } };
+        expect(toEntry(node({ ...file, encryptedCrypto: { armoredKey: 'ARMOR' } }))).toMatchObject({ armoredNodeKey: 'ARMOR' });
+        expect(toEntry(node(file))).not.toHaveProperty('armoredNodeKey', 'ARMOR');
+        expect(toEntry(node({ encryptedCrypto: { armoredKey: 'ARMOR' } }))).not.toHaveProperty('armoredNodeKey');
+    });
+
     test('a file without a claimed size is skipped: it would copy as empty', () => {
         const entry = toEntry(node({ type: NodeType.File, activeRevision: { uid: 'r' } }) as NodeEntity);
         expect(isSkipped(entry)).toBeTrue();

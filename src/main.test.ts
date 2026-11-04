@@ -10,6 +10,8 @@ import { VERSION } from './version.ts';
 
 import { HELP, THIRD_PARTY_NOTICE, run, runCommand, versionAnswer, authStatus, authLogout } from './main.ts';
 import { SessionFileStore } from './session/store.ts';
+import { FakeDrive } from '../fake-drive/drive.ts';
+import { TEMPORARY_SUFFIX } from './migrate.ts';
 
 const REV = 'b'.repeat(40);
 const ENV = { PDM_BUILD_REVISION: REV };
@@ -133,6 +135,123 @@ describe('serve dispatch', () => {
                 await chmodAsync(dir, 0o700).catch(() => {});
                 await rmAsync(dir, { recursive: true, force: true });
             }
+        }
+    });
+});
+
+describe('migrate-node-keys dispatch', () => {
+    test('HELP names the command, its folder and --dry-run', () => {
+        expect(HELP).toContain('migrate-node-keys FOLDER [--dry-run]');
+        expect(HELP).toContain('--dry-run');
+    });
+
+    test('without a folder, or with two, it exits 2 and shows the usage', async () => {
+        for (const argv of [['migrate-node-keys'], ['migrate-node-keys', 'a', 'b']]) {
+            const answer = await runCommand(argv, {});
+            expect(answer.code).toBe(2);
+            expect(answer.stderr).toContain('Usage: proton-drive-mount migrate-node-keys FOLDER [--dry-run]');
+        }
+    });
+
+    /** Signs in the way a user does, reading the control channel from stderr, as the serve test does. */
+    async function signIn(stateDir: string, driveDir: string): Promise<void> {
+        const stderrLines: string[] = [];
+        const realWrite = process.stderr.write;
+        process.stderr.write = ((chunk: string | Uint8Array) => {
+            stderrLines.push(String(chunk));
+            return realWrite.call(process.stderr, chunk);
+        }) as typeof process.stderr.write;
+        try {
+            await signInThroughMain(stateDir, driveDir, stderrLines);
+        } finally {
+            process.stderr.write = realWrite;
+        }
+    }
+
+    async function withDrives<T>(work: (stateDir: string, driveDir: string, lines: string[]) => Promise<T>): Promise<T> {
+        const stateDir = mkdtempSync(join(tmpdir(), 'pdm-main-migrate-state-XXXXXX'));
+        const driveDir = mkdtempSync(join(tmpdir(), 'pdm-main-migrate-drive-XXXXXX'));
+        try {
+            return await work(stateDir, driveDir, []);
+        } finally {
+            for (const dir of [stateDir, driveDir]) {
+                await chmodAsync(dir, 0o700).catch(() => {});
+                await rmAsync(dir, { recursive: true, force: true });
+            }
+        }
+    }
+
+    function capture(lines: string[]) {
+        return { print: (line: string) => lines.push(line), error: (line: string) => lines.push(`error: ${line}`) };
+    }
+
+    test('signed out, it says so and exits 1', async () => {
+        await withDrives(async (stateDir, driveDir, lines) => {
+            const answer = await runCommand(['migrate-node-keys', 'Photos', '--state-dir', stateDir, '--fake-drive', driveDir], {}, capture(lines));
+            expect(answer.code).toBe(1);
+            expect(lines).toEqual(['error: Not signed in to Proton. Run "proton-drive-mount auth login" first.']);
+        });
+    });
+
+    test('a session Proton refused is named, and exits 1', async () => {
+        await withDrives(async (stateDir, driveDir, lines) => {
+            await signIn(stateDir, driveDir);
+            const store = new SessionFileStore(stateDir);
+            const stored = (await store.load())!;
+            await store.save({ ...stored, refreshRejectedAt: '2026-08-01T00:00:00.000Z' });
+            const answer = await runCommand(['migrate-node-keys', 'Photos', '--state-dir', stateDir, '--fake-drive', driveDir], {}, capture(lines));
+            expect(answer.code).toBe(1);
+            expect(lines[0]).toContain('Proton refused the stored session at 2026-08-01T00:00:00.000Z');
+        });
+    });
+
+    test('a folder the Drive lacks exits 1 and names it', async () => {
+        await withDrives(async (stateDir, driveDir, lines) => {
+            await signIn(stateDir, driveDir);
+            const answer = await runCommand(['migrate-node-keys', 'Nowhere', '--state-dir', stateDir, '--fake-drive', driveDir], {}, capture(lines));
+            expect(answer.code).toBe(1);
+            expect(lines).toEqual(['error: /Nowhere not found']);
+        });
+    });
+
+    test('it migrates the folder, lists each file and sums up; a dry run changes nothing', async () => {
+        await withDrives(async (stateDir, driveDir, lines) => {
+            await signIn(stateDir, driveDir);
+            const drive = FakeDrive.open(driveDir);
+            drive.add('Photos/beach.jpg', { type: 'file', content: new TextEncoder().encode('sand'), nodeKey: 'argon2' });
+
+            const dry = await runCommand(['migrate-node-keys', 'Photos', '--dry-run', '--state-dir', stateDir, '--fake-drive', driveDir], {}, capture(lines));
+            expect(dry.code).toBe(0);
+            expect(lines).toEqual(['would migrate Photos/beach.jpg', 'Dry run: 1 to migrate, 0 already v4, 0 failed.']);
+            expect(drive.nodeAt('Photos/beach.jpg').nodeKeyVersion).toBe(6);
+
+            lines.length = 0;
+            const real = await runCommand(['migrate-node-keys', 'Photos', '--state-dir', stateDir, '--fake-drive', driveDir], {}, capture(lines));
+            expect(real.code).toBe(0);
+            expect(lines).toEqual(['migrated Photos/beach.jpg', '1 migrated, 0 finished from an earlier run, 0 already v4, 0 failed.']);
+            expect(drive.nodeAt('Photos/beach.jpg').nodeKeyVersion).toBe(4);
+        });
+    });
+
+    test('a file that fails makes the exit 1', async () => {
+        await withDrives(async (stateDir, driveDir, lines) => {
+            await signIn(stateDir, driveDir);
+            const drive = FakeDrive.open(driveDir);
+            drive.add('Photos/beach.jpg', { type: 'file', content: new TextEncoder().encode('sand'), nodeKey: 'argon2' });
+            drive.add(`Photos/beach.jpg${TEMPORARY_SUFFIX}`, { type: 'file', content: new TextEncoder().encode('x'), nodeKey: 'argon2' });
+            const answer = await runCommand(['migrate-node-keys', 'Photos', '--state-dir', stateDir, '--fake-drive', driveDir], {}, capture(lines));
+            expect(answer.code).toBe(1);
+            expect(lines.at(-1)).toContain('1 failed');
+        });
+    });
+
+    test('with the real Drive the state lock is taken: a live holder refuses the command', async () => {
+        const stateDir = mkdtempSync(join(tmpdir(), 'pdm-main-migrate-lock-XXXXXX'));
+        try {
+            await Bun.write(join(stateDir, 'lock.pid'), `${process.pid}\n`);
+            await expect(runCommand(['migrate-node-keys', 'Photos', '--state-dir', stateDir], {})).rejects.toThrow();
+        } finally {
+            await rmAsync(stateDir, { recursive: true, force: true });
         }
     });
 });

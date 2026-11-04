@@ -14,6 +14,7 @@ import { createLogger } from './logger.ts';
 import { resolveStateDir } from './paths.ts';
 import { SessionFileStore } from './session/store.ts';
 import { THIRD_PARTY_NOTICE } from './notice.ts';
+import { migrateNodeKeysCommand } from './migrate.ts';
 import { mountCommand, mountDeps } from './mount.ts';
 import { serveCommand, DEFAULT_HOST, DEFAULT_PORT } from './serve.ts';
 import { APP_VERSION, VERSION, buildRevision } from './version.ts';
@@ -29,6 +30,7 @@ Usage:
   proton-drive-mount auth logout [--state-dir DIR]
   proton-drive-mount serve [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--root PATH] [--state-dir DIR] [--fake-drive DIR]
   proton-drive-mount mount MOUNTPOINT [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--root PATH] [--state-dir DIR] [--fake-drive DIR]
+  proton-drive-mount migrate-node-keys FOLDER [--dry-run] [--state-dir DIR] [--fake-drive DIR]
   proton-drive-mount --version
   proton-drive-mount help
 
@@ -42,6 +44,13 @@ Options:
   MOUNTPOINT        mount runs the serve and rclone mount, with the tested settings, and mounts
                     the Drive there. SIGINT or SIGTERM stops both and unmounts.
   --root PATH       Folder inside "My files" to serve as /. Default: all of My files.
+  FOLDER            migrate-node-keys walks this folder of My files. For each file whose node key is
+                    OpenPGP v6 or locked with Argon2 (as rclone 1.75.0 wrote them), it uploads a copy
+                    under a temporary name (NAME.pdm-migrating), checks the copy, moves the original
+                    to Drive's trash and renames the copy to NAME. A re-run skips files with v4 keys
+                    and finishes a copy a stopped run left. Stop the serve and the mount first: it
+                    takes the same state lock.
+  --dry-run         migrate-node-keys only lists the files it would migrate; it changes nothing.
 `;
 
 export function versionAnswer(env: NodeJS.ProcessEnv = process.env): string {
@@ -137,6 +146,7 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
             host: { type: 'string' },
             port: { type: 'string' },
             root: { type: 'string' },
+            'dry-run': { type: 'boolean' },
             help: { type: 'boolean', short: 'h' },
             version: { type: 'boolean' },
         },
@@ -147,6 +157,22 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
     const command = positionals.join(' ');
     if (values.help || command === 'help') {
         return { code: 0, stdout: HELP, stderr: '' };
+    }
+    if (positionals[0] === 'migrate-node-keys') {
+        const folder = positionals[1];
+        if (positionals.length !== 2 || folder === undefined) {
+            return { code: 2, stdout: '', stderr: `Usage: proton-drive-mount migrate-node-keys FOLDER [--dry-run]\n` };
+        }
+        const code = await migrateNodeKeysCommand({
+            stateDir: resolveStateDir(values['state-dir'], env),
+            folder,
+            dryRun: values['dry-run'] ?? false,
+            logger: createLogger(env),
+            fakeDriveDir: values['fake-drive'],
+            print: output.print,
+            error: output.error,
+        });
+        return { code, stdout: '', stderr: '' };
     }
     if (command === 'auth login') {
         const code = await authLogin({

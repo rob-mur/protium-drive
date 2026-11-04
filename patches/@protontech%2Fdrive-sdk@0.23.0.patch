@@ -18,3 +18,52 @@ index b14fb6b79f0da15252dc00f7f09abbe82d9e9b1f..da423ec0eb841f314e6f159da3307d58
          // File progress is tracked for telemetry - to track at what
          // point the download failed.
          let fileProgress = 0;
+diff --git a/dist/interface/nodes.d.ts b/dist/interface/nodes.d.ts
+index 83ce8296d9658c5b6b4eb0a345429389ba5dc872..8486e32af4ef99c2a47dcb5b8dbd0b82765b8e65 100644
+--- a/dist/interface/nodes.d.ts
++++ b/dist/interface/nodes.d.ts
+@@ -110,6 +110,13 @@ export type NodeEntity = {
+      * nodes in the tree. Nodes cannot change scopes.
+      */
+     treeEventScopeId: string;
++    /**
++     * proton-drive-mount patch: the node key, armored and still locked. Present on nodes the
++     * SDK decrypted; `migrate-node-keys` reads its version and lock from it.
++     */
++    encryptedCrypto?: {
++        armoredKey: string;
++    };
+     /**
+      * If the error is not related to any specific field, it is set here.
+      *
+diff --git a/dist/internal/nodes/cryptoService.js b/dist/internal/nodes/cryptoService.js
+index 54df77eed7a920f33614dd8cadd0a318519426d8..66ba31ebe44b84dc2e9585556481cea7fdfe97bd 100644
+--- a/dist/internal/nodes/cryptoService.js
++++ b/dist/internal/nodes/cryptoService.js
+@@ -34,7 +34,10 @@ import { splitNodeUid } from '../uids';
+         const start = Date.now();
+         const commonNodeMetadata = {
+             ...node,
+-            encryptedCrypto: undefined
++            // proton-drive-mount patch: keep the armored node key so `migrate-node-keys` can read its version and lock.
++            encryptedCrypto: {
++                armoredKey: node.encryptedCrypto.armoredKey
++            }
+         };
+         const signatureEmailKeys = node.encryptedCrypto.signatureEmail ? await this.account.getPublicKeys(node.encryptedCrypto.signatureEmail) : [];
+         // Parent key is node or share key. Anonymous files are signed with
+diff --git a/dist/transformers.js b/dist/transformers.js
+index 479f2cc38529c28ed20016d7812c3deaade34249..12f893e01e6d7163c56da2208d3930d326e89d63 100644
+--- a/dist/transformers.js
++++ b/dist/transformers.js
+@@ -56,7 +56,9 @@ export function convertInternalNode(node) {
+         folder: node.folder,
+         deprecatedShareId: node.shareId,
+         treeEventScopeId: node.treeEventScopeId,
+-        errors: node.errors
++        errors: node.errors,
++        // proton-drive-mount patch: pass the armored node key through.
++        encryptedCrypto: node.encryptedCrypto
+     };
+ }
+ export async function* convertInternalPhotoNodeIterator(photoNodeIterator) {
