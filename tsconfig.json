@@ -19,6 +19,6 @@
             "@protontech/crypto/*": ["./node_modules/@protontech/crypto/src/*"]
         }
     },
-    "include": ["src/**/*.ts", "vendor/**/*.ts"],
+    "include": ["src/**/*.ts", "bench/**/*.ts", "vendor/**/*.ts"],
     "exclude": ["node_modules", "dist", "vendor/**/api-core-types.ts"]
 }

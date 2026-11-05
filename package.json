@@ -12,6 +12,7 @@
         "start": "bun src/main.ts",
         "test": "bun test",
         "check-types": "tsc --noEmit",
+        "bench": "bun bench/main.ts",
         "build": "bun build src/main.ts src/proton/crypto-worker.ts --compile --outfile dist/proton-drive-mount"
     },
     "dependencies": {
