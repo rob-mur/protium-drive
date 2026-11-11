@@ -67,6 +67,9 @@ function fakeRclone(order: string[], calls: { args: string[] }[]) {
 
 const BASE = { stateDir: '/s', host: '127.0.0.1', port: 0, logger: QUIET, mountpoint: '/mnt/x' };
 
+/** A mountpoint that is ready as it is. */
+const READY = async () => undefined;
+
 describe('mountCommand', () => {
     test('starts the serve, then rclone against its URL, and on the signal stops rclone before the serve', async () => {
         const order: string[] = [];
@@ -74,7 +77,7 @@ describe('mountCommand', () => {
         const abort = new AbortController();
         const running = mountCommand(
             { ...BASE, signal: abort.signal },
-            { serve: fakeServe(order), startRclone: fakeRclone(order, calls), rclone: 'rclone' },
+            { serve: fakeServe(order), startRclone: fakeRclone(order, calls), rclone: 'rclone', prepareMountpoint: READY },
         );
         await new Promise((r) => setTimeout(r, 10));
         abort.abort();
@@ -91,6 +94,7 @@ describe('mountCommand', () => {
             {
                 serve: fakeServe(order),
                 rclone: 'rclone',
+                prepareMountpoint: READY,
                 startRclone: () => ({ exited: Promise.resolve(1), stop: () => {} }),
             },
         );
@@ -111,6 +115,7 @@ describe('mountCommand', () => {
                 },
                 rclone: 'rclone',
                 startRclone: fakeRclone(order, calls),
+                prepareMountpoint: READY,
             },
         );
         expect(result).toBe(3);
@@ -121,9 +126,30 @@ describe('mountCommand', () => {
         const calls: { args: string[] }[] = [];
         const result = await mountCommand(
             { ...BASE },
-            { serve: async () => 1, rclone: 'rclone', startRclone: fakeRclone([], calls) },
+            { serve: async () => 1, rclone: 'rclone', startRclone: fakeRclone([], calls), prepareMountpoint: READY },
         );
         expect(result).toBe(1);
         expect(calls).toEqual([]);
+    });
+
+    test.each([1, 2])('checks the mountpoint first, and on a refusal with exit %d starts neither the serve nor rclone', async (code) => {
+        const order: string[] = [];
+        const calls: { args: string[] }[] = [];
+        const checked: string[] = [];
+        const result = await mountCommand(
+            { ...BASE },
+            {
+                serve: fakeServe(order),
+                rclone: 'rclone',
+                startRclone: fakeRclone(order, calls),
+                prepareMountpoint: async (path) => {
+                    checked.push(path);
+                    return { code, message: `Cannot use ${path}` };
+                },
+            },
+        );
+        expect(result).toBe(code);
+        expect(checked).toEqual(['/mnt/x']);
+        expect(order).toEqual([]);
     });
 });

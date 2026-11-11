@@ -43,7 +43,9 @@ Options:
                     authentication of its own; keep it on loopback.
   --port PORT       Port for serve to listen on. Default: ${DEFAULT_PORT}.
   MOUNTPOINT        mount runs the serve and rclone mount, with the tested settings, and mounts
-                    the Drive there. SIGINT or SIGTERM stops both and unmounts.
+                    the Drive there. SIGINT or SIGTERM stops both and unmounts. mount creates
+                    a MOUNTPOINT that does not exist and unmounts one a killed mount left. It
+                    refuses (exit 2) a MOUNTPOINT that is not an empty folder.
   --root PATH       Folder inside "My files" to serve as /. Default: all of My files.
   FOLDER            migrate-node-keys walks this folder of My files. For each file whose node key is
                     OpenPGP v6 or locked with Argon2 (as rclone 1.75.0 wrote them), it uploads a copy

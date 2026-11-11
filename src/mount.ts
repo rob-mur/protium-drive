@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 
 import type { Logger } from '../vendor/proton-drive-sdk-account';
 
+import { prepareMountpoint, type MountpointRefusal } from './mountpoint.ts';
 import { serveCommand, type ServeOptions } from './serve.ts';
 
 /** How long rclone gets to unmount after the stop signal before it is killed. */
@@ -63,18 +64,31 @@ export interface MountDeps {
     startRclone: (executable: string, args: string[]) => RcloneProcess;
     /** The rclone executable: the one the package pins. */
     rclone: string;
+    /** Makes the mountpoint an empty folder rclone can mount on, or says why it will not. */
+    prepareMountpoint: (path: string) => Promise<MountpointRefusal | undefined>;
 }
 
 export function mountDeps(env: NodeJS.ProcessEnv = process.env): MountDeps {
-    return { serve: serveCommand, startRclone: spawnRclone, rclone: env.PDM_RCLONE || 'rclone' };
+    return {
+        serve: serveCommand,
+        startRclone: spawnRclone,
+        rclone: env.PDM_RCLONE || 'rclone',
+        prepareMountpoint,
+    };
 }
 
 /**
- * Runs the serve and an rclone mount of it until the signal comes, then stops rclone (which
+ * Makes the mountpoint ready (see prepareMountpoint) before anything starts, then
+ * runs the serve and an rclone mount of it until the signal comes, then stops rclone (which
  * unmounts) and then the serve. Either one ending on its own ends the other.
  */
 export async function mountCommand(options: MountOptions, deps: MountDeps = mountDeps()): Promise<number> {
     const { mountpoint, signal, logger } = options;
+    const refusal = await deps.prepareMountpoint(mountpoint);
+    if (refusal) {
+        logger.error(refusal.message);
+        return refusal.code;
+    }
     const serveStop = new AbortController();
     let listening!: (url: URL) => void;
     const listens = new Promise<URL>((resolve) => (listening = resolve));
