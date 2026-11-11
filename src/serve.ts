@@ -2,6 +2,7 @@ import type { Logger } from '../vendor/proton-drive-sdk-account';
 
 import { EventWatcher } from './drive/events';
 import { Backoff } from './drive/backoff';
+import { ListingCacheFile } from './drive/listing-cache';
 import { DriveTree } from './drive/tree';
 import { acquireStateLock } from './session/lock';
 import type { FileCredentials } from './session/credentials';
@@ -74,8 +75,10 @@ export async function serveCommand(options: ServeOptions): Promise<number> {
                 logger.warn(LOOPBACK_WARNING(host));
             }
             const sdk = await connection.createDriveClient();
+            const cacheFile = new ListingCacheFile(stateDir);
             const tree = new DriveTree(sdk, logger, new Backoff(connection.clock?.now.bind(connection.clock)), {
                 rootPath: options.root ? parsePath(options.root) : undefined,
+                restore: await cacheFile.read(),
             });
             const server = startServer({
                 host,
@@ -106,12 +109,31 @@ export async function serveCommand(options: ServeOptions): Promise<number> {
             watcher.stop();
             // On a refusal, let the request that met it finish with its 401.
             await stop(server, ended === 'refused');
+            await saveListings(cacheFile, tree, watcher, logger);
             return ended === 'refused' ? NEEDS_LOGIN : 0;
         } finally {
             await connection.stop();
         }
     } finally {
         await release();
+    }
+}
+
+/**
+ * Saves the loaded listings with the last event they are true up to, so the
+ * next start replays the events since then instead of listing again. With no
+ * event read yet there is nothing to replay from, and nothing is saved.
+ */
+export async function saveListings(cacheFile: ListingCacheFile, tree: DriveTree, watcher: EventWatcher, logger: Logger): Promise<void> {
+    const snapshot = tree.snapshot();
+    const lastEventId = watcher.lastEventId;
+    if (!snapshot || lastEventId === undefined) {
+        return;
+    }
+    try {
+        await cacheFile.write({ ...snapshot, lastEventId });
+    } catch (error) {
+        logger.warn(`Could not save the listings to ${cacheFile.filePath}: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 

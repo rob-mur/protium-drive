@@ -3,6 +3,7 @@ import { NodeType, type MaybeMissingNode, type NodeEntity, type NodeOrUid, RateL
 
 import { Backoff } from './backoff.ts';
 import { DriveTree } from './tree.ts';
+import type { ListingSnapshot } from './listing-cache.ts';
 import type { DriveSdk } from './sdk.ts';
 
 type Node = NodeEntity;
@@ -976,5 +977,112 @@ describe('DriveTree cache drops', () => {
         tree.clear();
         await tree.list(root);
         expect(sdk.calls.get('iterateFolderChildrenNodeUids')).toBe(3);
+    });
+});
+
+describe('DriveTree snapshot and restore', () => {
+    function fixture(): Map<string, Node> {
+        return new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+            ['immich', folder('immich', 'immich', 'photos')],
+            ['beach', file('beach', 'beach.jpg', 'immich')],
+            ['docs', folder('docs', 'Documents', 'root')],
+        ]);
+    }
+
+    /** A snapshot taken from a tree that listed My files, Photos and immich. */
+    async function saved(): Promise<ListingSnapshot> {
+        const tree = new DriveTree(fakeSdk(fixture()) as never, QUIET);
+        await tree.stat(['Photos', 'immich', 'beach.jpg']);
+        return { ...tree.snapshot()!, lastEventId: 'event-7' };
+    }
+
+    test('a tree with no root yet has nothing to snapshot', () => {
+        expect(new DriveTree(fakeSdk(fixture()) as never, QUIET).snapshot()).toBeUndefined();
+    });
+
+    test('the snapshot holds each loaded listing by folder UID, keyed to My files and its event scope', async () => {
+        const snapshot = await saved();
+        expect(snapshot.rootUid).toBe('root');
+        expect(snapshot.eventScopeId).toBe('volume-1');
+        expect([...snapshot.listings.keys()].sort()).toEqual(['immich', 'photos', 'root']);
+        expect(snapshot.listings.get('immich')!.map((entry) => entry.uid)).toEqual(['beach']);
+    });
+
+    test('a dropped listing, and one that is still loading, are not in the snapshot', async () => {
+        const tree = new DriveTree(fakeSdk(fixture()) as never, QUIET);
+        const docs = (await tree.stat(['Documents']))!;
+        await tree.stat(['Photos', 'immich']);
+        tree.dropListings(['photos']);
+        const loading = tree.list(docs);
+        expect([...tree.snapshot()!.listings.keys()].sort()).toEqual(['root']);
+        await loading;
+        expect([...tree.snapshot()!.listings.keys()].sort()).toEqual(['docs', 'root']);
+    });
+
+    test('a restored tree answers from the snapshot without listing Drive, and keeps its event id', async () => {
+        const sdk = fakeSdk(fixture());
+        const tree = new DriveTree(sdk as never, QUIET, undefined, { restore: await saved() });
+        expect(tree.restoredEventId).toBeUndefined();
+        expect((await tree.stat(['Photos', 'immich', 'beach.jpg']))?.uid).toBe('beach');
+        expect(sdk.calls.get('iterateFolderChildrenNodeUids')).toBeUndefined();
+        expect(sdk.calls.get('iterateNodes')).toBeUndefined();
+        expect(tree.restoredEventId).toBe('event-7');
+    });
+
+    test('a restored tree with a root path walks to it through Drive, and answers below it from the snapshot', async () => {
+        const sdk = fakeSdk(fixture());
+        const tree = new DriveTree(sdk as never, QUIET, undefined, { rootPath: ['Photos', 'immich'], restore: await saved() });
+        expect((await tree.root()).uid).toBe('immich');
+        expect(sdk.calls.get('iterateFolderChildrenNodeUids')).toBe(2);
+        expect((await tree.stat(['beach.jpg']))?.uid).toBe('beach');
+        expect(sdk.calls.get('iterateFolderChildrenNodeUids')).toBe(2);
+    });
+
+    test('a root folder renamed while the serve was down is missing, though the snapshot still lists it', async () => {
+        const nodes = fixture();
+        nodes.set('photos', folder('photos', 'Pics', 'root'));
+        const tree = new DriveTree(fakeSdk(nodes) as never, QUIET, undefined, { rootPath: ['Photos'], restore: await saved() });
+        await expect(tree.root()).rejects.toThrow('Root folder /Photos does not exist in My files');
+    });
+
+    test('a root folder trashed while the serve was down is missing, though the snapshot still lists it', async () => {
+        const nodes = fixture();
+        nodes.set('photos', { ...folder('photos', 'Photos', 'root'), trashTime: new Date() } as Node);
+        const tree = new DriveTree(fakeSdk(nodes) as never, QUIET, undefined, { rootPath: ['Photos'], restore: await saved() });
+        await expect(tree.root()).rejects.toThrow('Root folder /Photos does not exist in My files');
+    });
+
+    test('restored listings no one asked for again are still in the next snapshot', async () => {
+        const restore = await saved();
+        const tree = new DriveTree(fakeSdk(fixture()) as never, QUIET, undefined, { restore });
+        await tree.root();
+        expect(tree.snapshot()!.listings).toEqual(restore.listings);
+    });
+
+    test('a snapshot of another My files is ignored, and the tree lists Drive', async () => {
+        const sdk = fakeSdk(fixture());
+        const tree = new DriveTree(sdk as never, QUIET, undefined, { restore: { ...(await saved()), rootUid: 'other-root' } });
+        expect((await tree.stat(['Photos', 'immich', 'beach.jpg']))?.uid).toBe('beach');
+        expect(sdk.calls.get('iterateFolderChildrenNodeUids')).toBe(3);
+        expect(tree.restoredEventId).toBeUndefined();
+    });
+
+    test('a snapshot of another event scope is ignored, and the tree lists Drive', async () => {
+        const sdk = fakeSdk(fixture());
+        const tree = new DriveTree(sdk as never, QUIET, undefined, { restore: { ...(await saved()), eventScopeId: 'volume-2' } });
+        await tree.stat(['Photos']);
+        expect(sdk.calls.get('iterateFolderChildrenNodeUids')).toBe(1);
+        expect(tree.restoredEventId).toBeUndefined();
+    });
+
+    test('a restored listing an event drops loads from Drive again', async () => {
+        const sdk = fakeSdk(fixture());
+        const tree = new DriveTree(sdk as never, QUIET, undefined, { restore: await saved() });
+        await tree.root();
+        tree.dropListings(['immich']);
+        expect((await tree.stat(['Photos', 'immich', 'beach.jpg']))?.uid).toBe('beach');
+        expect(sdk.calls.get('iterateFolderChildrenNodeUids')).toBe(1);
     });
 });

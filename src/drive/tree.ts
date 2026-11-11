@@ -6,6 +6,7 @@ import { Backoff } from './backoff';
 import { openDownload, type ByteRange } from './download';
 import { type Entry, isSkipped, toEntry } from './entry';
 import { DriveError } from './errors';
+import type { ListingSnapshot } from './listing-cache';
 import type { DriveSdk } from './sdk';
 
 /** One folder's children, by name. */
@@ -27,6 +28,12 @@ export type DriveTreeOptions = {
      * the first ask that finds it missing fails naming it.
      */
     rootPath?: string[];
+    /**
+     * Listings a previous serve saved. They are installed once My files'
+     * root is known, and only when the snapshot was taken of that root and
+     * its event scope; otherwise they are ignored.
+     */
+    restore?: ListingSnapshot;
 };
 
 /**
@@ -35,18 +42,52 @@ export type DriveTreeOptions = {
  * A folder's listing loads only when a client asks for it and stays cached by
  * folder UID, so repeated stats and listings cost no Drive calls and nothing
  * walks the tree in the background. A failed listing is not cached, so the
- * next ask loads the folder again.
+ * next ask loads the folder again. The loaded listings can be saved with
+ * `snapshot()` and handed to the next serve as `restore`.
  */
 export class DriveTree {
     private rootEntry?: Promise<Entry>;
     private readonly listings = new Map<string, Promise<Listing>>();
+    /** The listings that finished loading, by the promise `listings` holds for them. */
+    private readonly loaded = new WeakMap<Promise<Listing>, Listing>();
+    private myFilesRoot?: Entry;
+    private pendingRestore?: ListingSnapshot;
+    private restoredFrom?: string;
 
     constructor(
         private readonly sdk: DriveSdk,
         private readonly logger: Logger,
         readonly backoff: Backoff = new Backoff(),
         private readonly options: DriveTreeOptions = {},
-    ) {}
+    ) {
+        this.pendingRestore = options.restore;
+    }
+
+    /**
+     * The Drive event the restored listings are true up to, once the root has
+     * loaded and the snapshot applied; `undefined` when nothing was restored.
+     */
+    get restoredEventId(): string | undefined {
+        return this.restoredFrom;
+    }
+
+    /**
+     * The listings that finished loading, keyed to My files' root and its
+     * event scope; `undefined` before the root has loaded.
+     */
+    snapshot(): Omit<ListingSnapshot, 'lastEventId'> | undefined {
+        if (!this.myFilesRoot) {
+            return undefined;
+        }
+        const listings = new Map<string, Entry[]>();
+        for (const [folderUid, pending] of this.listings) {
+            const listing = this.loaded.get(pending);
+            if (listing) {
+                listings.set(folderUid, [...listing.values()]);
+            }
+        }
+        return { rootUid: this.myFilesRoot.uid, eventScopeId: this.myFilesRoot.treeEventScopeId, listings };
+    }
 
     /** The served root: My files, or the `--root` folder inside it. */
     root(): Promise<Entry> {
@@ -256,16 +297,20 @@ export class DriveTree {
 
     /** The folder's cached listing, loading it from the SDK on the first ask. */
     private listing(folderUid: string): Promise<Listing> {
-        let pending = this.listings.get(folderUid);
-        if (!pending) {
-            pending = this.loadListing(folderUid);
-            this.listings.set(folderUid, pending);
-            pending.catch(() => {
+        const cached = this.listings.get(folderUid);
+        if (cached) {
+            return cached;
+        }
+        const pending = this.loadListing(folderUid);
+        this.listings.set(folderUid, pending);
+        pending.then(
+            (listing) => this.loaded.set(pending, listing),
+            () => {
                 if (this.listings.get(folderUid) === pending) {
                     this.listings.delete(folderUid);
                 }
-            });
-        }
+            },
+        );
         return pending;
     }
 
@@ -274,6 +319,19 @@ export class DriveTree {
         for (const uid of folderUids) {
             if (uid !== undefined) {
                 this.listings.delete(uid);
+            }
+        }
+    }
+
+    /**
+     * Drops every loaded listing that holds this node. A move's event names only the new
+     * parent, so this is how the old parent's listing learns the node left.
+     */
+    dropListingsHolding(nodeUid: string): void {
+        for (const [folderUid, pending] of this.listings) {
+            const listing = this.loaded.get(pending);
+            if (listing && [...listing.values()].some((entry) => entry.uid === nodeUid)) {
+                this.listings.delete(folderUid);
             }
         }
     }
@@ -321,11 +379,16 @@ export class DriveTree {
             if (isSkipped(entry)) {
                 throw new Error(`Cannot serve the root of My files: ${entry.skipped}`);
             }
+            this.myFilesRoot = entry;
+            this.applyRestore(entry);
             const rootPath = this.options.rootPath ?? [];
             for (const segment of rootPath) {
                 if (entry.kind !== 'folder') {
                     throw missingRoot(rootPath);
                 }
+                // A restored listing may predate a rename or trash of the root folder, and the
+                // event replay comes too late to undo a root resolved through it: list from Drive.
+                this.listings.delete(entry.uid);
                 const child: Entry | undefined = (await this.listing(entry.uid)).get(segment);
                 if (!child || child.kind !== 'folder') {
                     throw missingRoot(rootPath);
@@ -334,6 +397,26 @@ export class DriveTree {
             }
             return entry;
         });
+    }
+
+    /** Installs the saved listings, once, if they were taken of this My files root and scope. */
+    private applyRestore(myFilesRoot: Entry): void {
+        const saved = this.pendingRestore;
+        this.pendingRestore = undefined;
+        if (!saved) {
+            return;
+        }
+        if (saved.rootUid !== myFilesRoot.uid || saved.eventScopeId !== myFilesRoot.treeEventScopeId) {
+            this.logger.info('Ignoring the saved listings: they belong to another My files');
+            return;
+        }
+        for (const [folderUid, entries] of saved.listings) {
+            const listing: Listing = new Map(entries.map((entry) => [entry.name, entry]));
+            const pending = Promise.resolve(listing);
+            this.loaded.set(pending, listing);
+            this.listings.set(folderUid, pending);
+        }
+        this.restoredFrom = saved.lastEventId;
     }
 }
 

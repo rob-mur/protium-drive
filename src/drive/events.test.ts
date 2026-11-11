@@ -4,6 +4,7 @@ import { DriveEventType, type DriveEvent, NodeType, type NodeEntity, RateLimited
 import { Backoff } from './backoff.ts';
 import { EventWatcher, START_RETRY_MS } from './events.ts';
 import type { DriveSdk } from './sdk.ts';
+import type { ListingSnapshot } from './listing-cache.ts';
 import { DriveTree } from './tree.ts';
 
 const logger = { debug() {}, info() {}, warn() {}, error() {} };
@@ -21,7 +22,9 @@ function node(uid: string, name: string, parentUid?: string): NodeEntity {
 }
 
 /** An SDK whose folders hold nothing, whose scheduler the test drives, and whose events the test sets. */
-function setup(options: { startFailures?: number; now?: () => number; authProblem?: () => string | undefined } = {}) {
+function setup(
+    options: { startFailures?: number; now?: () => number; authProblem?: () => string | undefined; restore?: ListingSnapshot } = {},
+) {
     const calls = { listed: [] as string[], iterated: [] as (string | undefined)[], scopes: [] as string[], schedulers: 0 };
     let events: DriveEvent[] = [];
     let poll: (scope: string) => Promise<void> = async () => {};
@@ -49,7 +52,7 @@ function setup(options: { startFailures?: number; now?: () => number; authProble
         },
     } as unknown as DriveSdk;
     const backoff = new Backoff(options.now);
-    const tree = new DriveTree(sdk, logger, backoff);
+    const tree = new DriveTree(sdk, logger, backoff, { restore: options.restore });
     const timers: { callback: () => unknown; ms: number }[] = [];
     const watcher = new EventWatcher(sdk, tree, logger, {
         authProblem: options.authProblem ?? (() => undefined),
@@ -77,6 +80,60 @@ const created = (eventId: string, nodeUid: string, parentNodeUid: string): Drive
 });
 
 describe('EventWatcher', () => {
+    test('the last event id is unknown until a poll reads one, then it is the last seen', async () => {
+        const s = setup();
+        await s.watcher.start();
+        expect(s.watcher.lastEventId).toBeUndefined();
+        s.setEvents([{ type: DriveEventType.FastForward, treeEventScopeId: 'scope-1', eventId: '5' }, created('6', 'file', 'root')]);
+        await s.poll();
+        expect(s.watcher.lastEventId).toBe('6');
+    });
+
+    test('over restored listings, the first poll reads from the saved event, and drops only what its events name', async () => {
+        const folder = { name: 'x', kind: 'folder', size: 0, modified: new Date(0), created: new Date(0), treeEventScopeId: 'scope-1' } as const;
+        const restore: ListingSnapshot = {
+            rootUid: 'root',
+            eventScopeId: 'scope-1',
+            lastEventId: '41',
+            listings: new Map([
+                ['root', [{ ...folder, uid: 'a', name: 'a', parentUid: 'root' }]],
+                ['a', []],
+                ['b', []],
+            ]),
+        };
+        const s = setup({ restore });
+        await s.watcher.start();
+        expect(s.watcher.lastEventId).toBe('41');
+        s.setEvents([created('42', 'b', 'a')]);
+        await s.poll();
+        expect(s.calls.iterated).toEqual(['41']);
+        const root = await s.tree.root();
+        for (const uid of ['root', 'a', 'b']) await s.tree.list({ ...root, uid });
+        expect(s.calls.listed).toEqual(['a', 'b']);
+    });
+
+    test('a replayed move drops the old parent’s restored listing too, though the event names only the new parent', async () => {
+        const folder = { kind: 'folder', size: 0, modified: new Date(0), created: new Date(0), treeEventScopeId: 'scope-1' } as const;
+        const restore: ListingSnapshot = {
+            rootUid: 'root',
+            eventScopeId: 'scope-1',
+            lastEventId: '41',
+            listings: new Map([
+                ['root', [{ ...folder, uid: 'a', name: 'a', parentUid: 'root' }, { ...folder, uid: 'b', name: 'b', parentUid: 'root' }]],
+                ['a', [{ ...folder, uid: 'f', name: 'f', parentUid: 'a' }]],
+                ['b', []],
+                ['c', []],
+            ]),
+        };
+        const s = setup({ restore });
+        await s.watcher.start();
+        s.setEvents([{ type: DriveEventType.NodeUpdated, nodeUid: 'f', parentNodeUid: 'b', isTrashed: false, isShared: false, treeEventScopeId: 'scope-1', eventId: '42' }]);
+        await s.poll();
+        const root = await s.tree.root();
+        for (const uid of ['root', 'a', 'b', 'c']) await s.tree.list({ ...root, uid });
+        expect(s.calls.listed).toEqual(['a', 'b']);
+    });
+
     test('registers the root node’s event scope with the scheduler, listing no folder', async () => {
         const s = setup();
         await s.watcher.start();

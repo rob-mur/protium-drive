@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rm as rmAsync } from 'node:fs/promises';
@@ -6,8 +6,9 @@ import { rm as rmAsync } from 'node:fs/promises';
 import { afterEach, describe, expect, test } from 'bun:test';
 
 import { authLogin } from './auth/login.ts';
+import { LISTING_CACHE_FILE_NAME, ListingCacheFile } from './drive/listing-cache.ts';
 import { createLogger } from './logger.ts';
-import { serveCommand, NOT_SIGNED_IN, LOOPBACK_WARNING, NEEDS_LOGIN, REFUSED_SESSION } from './serve.ts';
+import { saveListings, serveCommand, NOT_SIGNED_IN, LOOPBACK_WARNING, NEEDS_LOGIN, REFUSED_SESSION } from './serve.ts';
 import { SessionFileStore } from './session/store.ts';
 import { CONTROL_LINE, startReceiveArm } from '../fake-drive/receive-arm.ts';
 
@@ -381,6 +382,8 @@ describe('serveCommand', () => {
         expect(account.refreshes).toEqual([{ used: 'refresh-1', outcome: 'refused' }]);
         // The session file keeps the refused session, marked.
         expect(readFileSync(join(stateDir, 'session.json'), 'utf8')).toContain('refreshRejectedAt');
+        // The serve still stopped in order, so it saved its listings and the event they are true up to.
+        expect((await new ListingCacheFile(stateDir).read())?.rootUid).toBeString();
     });
 
     test('a failed overwrite refuses the DELETE for 60 s on the Drive clock, then frees it', async () => {
@@ -426,6 +429,90 @@ describe('serveCommand', () => {
         expect(await serving).toBe(0);
 
         expect(trash.map((node) => node.name)).toContain('beach.jpg');
+    });
+});
+
+describe('serveCommand listing cache', () => {
+    /** Serves until `use` is done with the URL, then stops the serve as SIGTERM would. */
+    async function serveOnce(stateDir: string, driveDir: string, use: (url: string) => Promise<void>, warns: string[] = []): Promise<void> {
+        const abort = new AbortController();
+        const infos: string[] = [];
+        const logger = { ...QUIET, info: (line: string) => infos.push(line), warn: (line: string) => warns.push(line) };
+        const serving = serveCommand({ stateDir, host: '127.0.0.1', port: 0, logger, fakeDriveDir: driveDir, signal: abort.signal });
+        const url = (await waitFor(infos, 'Serving Proton Drive'))!.match(/https?:\/\/\S+/)![0];
+        try {
+            await use(url);
+        } finally {
+            abort.abort();
+            expect(await serving).toBe(0);
+        }
+    }
+
+    async function names(url: string, path: string): Promise<string[]> {
+        const response = await fetch(new URL(path, url), { method: 'PROPFIND', headers: { Depth: '1' } });
+        expect(response.status).toBe(207);
+        return [...(await response.text()).matchAll(/<D:displayname>([^<]*)</g)].map((match) => match[1]!).sort();
+    }
+
+    test('a serve that stops saves the listings it loaded to listing-cache.json, mode 0600', async () => {
+        const stateDir = scratch('state');
+        const driveDir = scratch('drive');
+        await seedDrive(driveDir, [{ path: '/Photos/beach.jpg', type: 'file', contentBase64: btoa('sand') }]);
+        await signIn(stateDir, driveDir);
+        await serveOnce(stateDir, driveDir, async (url) => {
+            await names(url, 'Photos/');
+        });
+
+        const file = join(stateDir, LISTING_CACHE_FILE_NAME);
+        expect(statSync(file).mode & 0o777).toBe(0o600);
+        const saved = await new ListingCacheFile(stateDir).read();
+        const listed = [...saved!.listings.values()].flat().map((entry) => entry.name).sort();
+        expect(listed).toEqual(['Photos', 'beach.jpg']);
+    });
+
+    test('a serve that cannot save the listings warns and still exits 0', async () => {
+        const stateDir = scratch('state');
+        const driveDir = scratch('drive');
+        await seedDrive(driveDir, [{ path: '/Photos/beach.jpg', type: 'file', contentBase64: btoa('sand') }]);
+        await signIn(stateDir, driveDir);
+        const warns: string[] = [];
+        await serveOnce(
+            stateDir,
+            driveDir,
+            async (url) => {
+                await names(url, 'Photos/');
+                // A directory in the file's place makes the final rename fail.
+                mkdirSync(join(stateDir, LISTING_CACHE_FILE_NAME));
+            },
+            warns,
+        );
+
+        expect(warns.some((line) => line.startsWith('Could not save the listings'))).toBe(true);
+    });
+
+    test('with no event read yet, nothing is saved; once one is read, the listings are saved with it', async () => {
+        const stateDir = scratch('state');
+        const cacheFile = new ListingCacheFile(stateDir);
+        const tree = { snapshot: () => ({ rootUid: 'root', eventScopeId: 'volume-1', listings: new Map([['root', []]]) }) };
+        await saveListings(cacheFile, tree as never, { lastEventId: undefined } as never, QUIET);
+        expect(existsSync(join(stateDir, LISTING_CACHE_FILE_NAME))).toBe(false);
+        await saveListings(cacheFile, tree as never, { lastEventId: 'event-3' } as never, QUIET);
+        expect((await cacheFile.read())?.lastEventId).toBe('event-3');
+    });
+
+    test('a restarted serve shows what changed in the Drive while it was down', async () => {
+        const stateDir = scratch('state');
+        const driveDir = scratch('drive');
+        await seedDrive(driveDir, [{ path: '/Photos/beach.jpg', type: 'file', contentBase64: btoa('sand') }]);
+        await signIn(stateDir, driveDir);
+        await serveOnce(stateDir, driveDir, async (url) => {
+            expect(await names(url, 'Photos/')).toContain('beach.jpg');
+        });
+        await seedDrive(driveDir, [{ path: '/Photos/sun.jpg', type: 'file', contentBase64: btoa('sun') }]);
+
+        await serveOnce(stateDir, driveDir, async (url) => {
+            expect(await names(url, 'Photos/')).toEqual(['Photos', 'beach.jpg', 'sun.jpg']);
+        });
     });
 });
 

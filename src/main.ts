@@ -10,6 +10,7 @@ import { parseArgs } from 'node:util';
 import { VERSION as SDK_VERSION } from '@protontech/drive-sdk';
 
 import { authLogin } from './auth/login.ts';
+import { ListingCacheFile } from './drive/listing-cache.ts';
 import { createLogger } from './logger.ts';
 import { resolveStateDir } from './paths.ts';
 import { acquireStateLock } from './session/lock.ts';
@@ -142,7 +143,8 @@ export async function authStatus(stateDir: string, output: Output = CONSOLE_OUTP
 }
 
 /**
- * Deletes the local session file. It never calls Proton, so Proton keeps the
+ * Deletes the local session file, and the saved listings with it, since they
+ * hold the account's file names. It never calls Proton, so Proton keeps the
  * session until it expires or the user revokes it there. It takes the state
  * lock, so it refuses while a serve uses the session.
  */
@@ -151,6 +153,7 @@ export async function authLogout(stateDir: string, output: Output = CONSOLE_OUTP
     let removed: boolean;
     try {
         removed = await new SessionFileStore(stateDir).remove();
+        await new ListingCacheFile(stateDir).remove();
     } finally {
         await release();
     }

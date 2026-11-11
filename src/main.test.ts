@@ -9,6 +9,7 @@ import { VERSION as SDK_VERSION } from '@protontech/drive-sdk';
 import { VERSION } from './version.ts';
 
 import { HELP, THIRD_PARTY_NOTICE, run, runCommand, versionAnswer, authStatus, authLogout } from './main.ts';
+import { ListingCacheFile } from './drive/listing-cache.ts';
 import { SessionFileStore } from './session/store.ts';
 import { acquireStateLock } from './session/lock.ts';
 import { FakeDrive } from '../fake-drive/drive.ts';
@@ -409,6 +410,15 @@ describe('auth status', () => {
             await release();
         }
         expect(await store.load()).not.toBeNull();
+    });
+
+    test('deletes the saved listings too, since they hold the file names', async () => {
+        const stateDir = mkdtemp('logout-listings');
+        await new SessionFileStore(stateDir).save(storedSession());
+        const cache = new ListingCacheFile(stateDir);
+        await cache.write({ rootUid: 'root', eventScopeId: 'volume', lastEventId: 'event-1', listings: new Map([['root', []]]) });
+        await authLogout(stateDir, { print: () => {}, error: () => {} });
+        expect(await cache.read()).toBeUndefined();
     });
 
     test('without a session it says so and exits 0', async () => {

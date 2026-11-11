@@ -22,12 +22,15 @@ export type EventWatcherOptions = {
  *
  * It registers the served volume's event scope with the SDK's event scheduler, which calls back
  * on its own timer. Each call reads only the events since the last one: a node event drops the
- * node's own listing and its parent's; a tree refresh or removal, and the first poll's
- * fast-forward, drop them all. A poll during a rate-limit pause, or without a session, reads
- * nothing. A start that fails (Proton down, no session yet) is retried every 60 s.
+ * node's own listing, its parent's, and any other listing that holds it (a move names only the
+ * new parent); a tree refresh or removal, and the first poll's
+ * fast-forward, drop them all. Over listings a previous serve saved, the first call reads from
+ * the event they were saved at instead, so it drops only what changed since. A poll during a
+ * rate-limit pause, or without a session, reads nothing. A start that fails (Proton down, no
+ * session yet) is retried every 60 s.
  */
 export class EventWatcher {
-    private lastEventId?: string;
+    private eventId?: string;
     private stopped = false;
     private retry?: unknown;
     private scheduler?: { removeScope(scopeId: string): void };
@@ -40,6 +43,11 @@ export class EventWatcher {
         private readonly options: EventWatcherOptions,
     ) {}
 
+    /** The last Drive event read, which the tree's listings are true up to; `undefined` before the first read. */
+    get lastEventId(): string | undefined {
+        return this.eventId;
+    }
+
     /** Registers the scope with the scheduler; on failure, schedules its own retry instead of throwing. */
     async start(): Promise<void> {
         if (this.stopped) {
@@ -47,6 +55,7 @@ export class EventWatcher {
         }
         try {
             const root = await this.tree.root();
+            this.eventId ??= this.tree.restoredEventId;
             const scheduler = await this.sdk.getEventScheduler((scopeId) => this.poll(scopeId));
             scheduler.addScope(root.treeEventScopeId);
             this.scheduler = scheduler;
@@ -82,9 +91,9 @@ export class EventWatcher {
         }
         try {
             await this.tree.backoff.run(async () => {
-                for await (const event of this.sdk.iterateEvents(_scopeId, this.lastEventId)) {
+                for await (const event of this.sdk.iterateEvents(_scopeId, this.eventId)) {
                     this.apply(event);
-                    this.lastEventId = event.eventId;
+                    this.eventId = event.eventId;
                 }
             });
         } catch (error: unknown) {
@@ -98,6 +107,7 @@ export class EventWatcher {
             case DriveEventType.NodeUpdated:
             case DriveEventType.NodeDeleted:
                 this.tree.dropListings([event.nodeUid, event.parentNodeUid]);
+                this.tree.dropListingsHolding(event.nodeUid);
                 return;
             case DriveEventType.TreeRefresh:
             case DriveEventType.TreeRemove:
