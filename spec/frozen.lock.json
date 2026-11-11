@@ -145,26 +145,17 @@
     {
       "id": "listing-a-large-folder-loads-each-photo-once",
       "path": "spec/features/listing-performance.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the listing shows (\\d+) files from \"([^\"]*)\" to \"([^\"]*)\", and the Drive loaded each of their nodes once$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "listing-a-large-folder-again-loads-no-node",
       "path": "spec/features/listing-performance.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the last listing shows (\\d+) files, and the Drive listed \"([^\"]*)\" once and loaded (\\d+) nodes in all$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "reading-a-photo-in-a-listed-folder-lists-no-folder-again",
       "path": "spec/features/listing-performance.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the read gives the photo's content, and the Drive listed \"([^\"]*)\" once$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-restarted-serve-lists-a-large-folder-without-loading-its-nodes",
