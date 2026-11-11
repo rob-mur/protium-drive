@@ -68,6 +68,19 @@ describe('the control channel', () => {
         expect(await (await get(`/content${query('Docs/a.txt')}&revision=${revisions[0].uid}`)).text()).toBe('one');
     });
 
+    test('replaces a file as another client, with the modification time its upload claims', async () => {
+        await json(post('/add', { path: 'a.txt', type: 'file', content: 'aaaa' }));
+        await json(post('/add', { path: 'a.txt', type: 'file', content: 'bbbb', modificationTime: '2026-06-01T00:00:00.000Z' }));
+
+        expect(await json(get(`/revisions${query('a.txt')}`))).toMatchObject([
+            { state: 'superseded', size: 4 },
+            { state: 'active', size: 4, claimedModificationTime: '2026-06-01T00:00:00.000Z' },
+        ]);
+        expect(await (await get(`/content${query('a.txt')}`)).text()).toBe('bbbb');
+        const { activeRevision } = await client.getNode(drive.nodeAt('a.txt').uid);
+        expect(activeRevision?.claimedModificationTime).toEqual(new Date('2026-06-01T00:00:00.000Z'));
+    });
+
     test('adds the nodes the product must hide', async () => {
         await json(post('/add', { path: 'secret', type: 'file', content: 'x', nameUndecryptable: true }));
         await json(post('/add', { path: 'sizeless', type: 'file', content: 'x', clearTextSize: false }));
@@ -146,6 +159,8 @@ describe('the control channel', () => {
             { path: 'x.bin', type: 'file', contentBase64: '!!!notbase64' },
             { path: 'x.bin', type: 'file', content: 'x', clearTextSize: 'no' },
             { path: 'x.bin', type: 'file', content: 'x', mediaType: 5 },
+            { path: 'x.bin', type: 'file', content: 'x', modificationTime: 'yesterday' },
+            { path: 'x.bin', type: 'file', content: 'x', modificationTime: 5 },
         ];
         for (const body of bad) {
             const response = await post('/add', body);

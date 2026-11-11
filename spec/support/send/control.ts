@@ -115,8 +115,9 @@ export class Control {
     return this.json("GET", "calls");
   }
 
-  addFile(path: string, content: string): Promise<{ uid: string }> {
-    return this.json("POST", "add", undefined, { path, type: "file", content });
+  /** Adds the file at `path`, or a new revision of the file there, with the modification time the upload claims, if given. */
+  addFile(path: string, content: string, modificationTime?: Date): Promise<{ uid: string }> {
+    return this.json("POST", "add", undefined, { path, type: "file", content, modificationTime: modificationTime?.toISOString() });
   }
 
   trash(path: string): Promise<{ uid: string }> {

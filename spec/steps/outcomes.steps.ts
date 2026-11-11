@@ -6,7 +6,7 @@ import { poll } from "@cd-pipeline/support";
 import { join } from "node:path";
 
 import { Control, type CallCounts } from "../support/send/control.ts";
-import { listMounted, type MountOutcome } from "../support/send/mount.ts";
+import { listMounted, type MountOutcome, readMounted } from "../support/send/mount.ts";
 import { claim, decode, last, refusedWith, type Row, says, showsExactly, sum } from "./claims.ts";
 import { DIR_CACHE_TIME_FLAG, type DriveWorld } from "./world.ts";
 
@@ -121,3 +121,29 @@ Then(/^the mount exited with status 2, naming the dir cache time, and served not
   claim(mount.process.stderr.includes(DIR_CACHE_TIME_FLAG), () => `the mount's message does not name ${DIR_CACHE_TIME_FLAG}.\n${this.whatHappened()}`);
   claim(Control.fromOutput(mount.process.output) === undefined, () => `the mount started the serve before it refused.\n${this.whatHappened()}`);
 });
+
+Then(
+  /^the mounted file "([^"]*)" held "([^"]*)" at first, and within (\d+) seconds it holds "([^"]*)" on two reads in a row$/,
+  async function (this: DriveWorld, path: string, before: string, seconds: string, after: string) {
+    const mount = this.mount;
+    claim(mount, () => `nothing was mounted.\n${this.whatHappened()}`);
+    const first = this.mountedRead?.file;
+    claim(first, () => `nothing was read through the mount.\n${this.whatHappened()}`);
+    claim(first.exitCode === 0, () => `the first read of the mounted file failed (${first.command}): ${first.stderr}\n${this.whatHappened()}`);
+    claim(decode(first.stdout) === before, () => `the first read of the mounted file gave "${decode(first.stdout)}", not "${before}"`);
+    const reads: MountOutcome[] = [];
+    const gives = (read: MountOutcome | undefined) => read?.exitCode === 0 && decode(read.stdout) === after;
+    const read = async () => {
+      reads.push(await readMounted(join(mount.mountpoint, path)));
+      return reads.at(-1);
+    };
+    await poll(async () => gives(await read()) && gives(await read()), { withinMs: Number(seconds) * 1000 });
+    const said = (read: MountOutcome | undefined) =>
+      !read ? "nothing" : read.exitCode === 0 ? `"${decode(read.stdout)}"` : `a failure (${read.command}): ${read.stderr}`;
+    claim(reads.length > 0, () => `the mounted file "${path}" was never read again.\n${this.whatHappened()}`);
+    claim(
+      gives(reads.at(-2)) && gives(reads.at(-1)),
+      () => `after ${seconds} s the last two reads of the mounted file "${path}" gave ${said(reads.at(-2))} and ${said(reads.at(-1))}, not "${after}".\n${this.whatHappened()}`,
+    );
+  },
+);

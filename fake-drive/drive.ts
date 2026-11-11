@@ -133,7 +133,16 @@ export type RevisionInfo = Omit<RevisionRecord, 'blob'> & { state: 'active' | 's
 /** What another client adds at a path. */
 export type AddSpec =
     | { type: 'folder' }
-    | { type: 'file'; content: Uint8Array; mediaType?: string; nameUndecryptable?: boolean; clearTextSize?: boolean; nodeKey?: NodeKeyKind };
+    | {
+          type: 'file';
+          content: Uint8Array;
+          mediaType?: string;
+          nameUndecryptable?: boolean;
+          clearTextSize?: boolean;
+          nodeKey?: NodeKeyKind;
+          /** The modification time the other client's upload claims, as a device that edits a file does. */
+          modificationTime?: Date;
+      };
 
 /**
  * The calls the product made through one `FakeDriveClient`, kept in memory, not in `DIR`. A
@@ -258,7 +267,12 @@ export class FakeDrive {
                 if (existing && existing.type !== 'folder') throw new ValidationError(`fake-drive: ${path} is a file`);
                 return (existing ?? this.insert(parent.uid, name, 'folder')).uid;
             }
-            const content = { content: spec.content, mediaType: spec.mediaType ?? 'application/octet-stream', declaredSize: spec.content.length };
+            const content = {
+                content: spec.content,
+                mediaType: spec.mediaType ?? 'application/octet-stream',
+                declaredSize: spec.content.length,
+                modificationTime: spec.modificationTime,
+            };
             const node = existing ?? this.insert(parent.uid, name, 'file', content, true);
             if (existing) {
                 if (existing.type !== 'file') throw new ValidationError(`fake-drive: ${path} is a folder`);

@@ -9,8 +9,9 @@
  *   GET  /trash                        the trashed nodes (NodeInfo[])
  *   GET  /calls                        the SDK call counts (CallCounts)
  *   POST /add      {path, type: "file" | "folder", content? | contentBase64?, mediaType?,
- *                   nameUndecryptable?, clearTextSize?, nodeKey?}   -> {uid}
- *                   nodeKey is "v4" (the default) or "argon2" (node-keys.ts)
+ *                   nameUndecryptable?, clearTextSize?, nodeKey?, modificationTime?}   -> {uid}
+ *                   nodeKey is "v4" (the default) or "argon2" (node-keys.ts); modificationTime is
+ *                   the ISO 8601 time the upload claims. A file that exists gets a new revision.
  *   POST /rename   {path, name}                               -> {uid}
  *   POST /trash    {path}                                     -> {uid}
  *   POST /events/fire                                         -> {scopes}: polls the event scheduler
@@ -200,7 +201,16 @@ function addSpec(body: Record<string, unknown>): AddSpec {
         nameUndecryptable: flag(body, 'nameUndecryptable'),
         clearTextSize: flag(body, 'clearTextSize'),
         nodeKey: nodeKey(body),
+        modificationTime: modificationTime(body),
     };
+}
+
+function modificationTime(body: Record<string, unknown>): Date | undefined {
+    const value = body.modificationTime;
+    if (value === undefined) return undefined;
+    const time = typeof value === 'string' ? new Date(value) : undefined;
+    if (!time || Number.isNaN(time.getTime())) throw new BadRequest('modificationTime is not an ISO 8601 time');
+    return time;
 }
 
 function nodeKey(body: Record<string, unknown>): NodeKeyKind | undefined {

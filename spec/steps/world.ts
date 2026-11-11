@@ -470,6 +470,21 @@ export class DriveWorld extends World {
     else this.trouble(`no control channel to add ${path}`);
   }
 
+  /**
+   * Uploads a new revision of the file at `path`, as another device that edits it does: its upload
+   * claims the time of the edit, which falls in a later second than the time the file had.
+   */
+  async anotherClientReplaces(path: string, text: string): Promise<void> {
+    const control = (await this.serving()).control;
+    if (!control) return this.trouble(`no control channel to replace ${path}`);
+    await this.attempt(`replacing ${path} as another client`, async () => {
+      const node = await control.node(path);
+      if (node.type !== "file") throw new Error(`${path} is a ${node.type}, not a file`);
+      const before = Date.parse(node.claimedModificationTime ?? node.modified);
+      return control.addFile(path, text, new Date(Math.max(Date.now(), before + 1000)));
+    });
+  }
+
   async anotherClientTrashes(path: string): Promise<void> {
     const control = (await this.ensureServing()).control;
     if (control) await this.attempt(`trashing ${path} as another client`, () => control.trash(path));

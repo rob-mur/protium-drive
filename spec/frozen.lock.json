@@ -168,6 +168,14 @@
       ]
     },
     {
+      "id": "a-same-size-edit-elsewhere-shows-in-the-mount-after-the-dir-cache-time",
+      "path": "spec/features/mount-settings.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the mounted file \"([^\"]*)\" held \"([^\"]*)\" at first, and within (\\d+) seconds it holds \"([^\"]*)\" on two reads in a row$"
+      ]
+    },
+    {
       "id": "a-dir-cache-time-that-is-not-a-duration-stops-the-mount-before-the-serve",
       "path": "spec/features/mount-settings.feature",
       "expected_status": "green"

@@ -50,6 +50,10 @@ When(/^another client adds the file "([^"]*)" containing "([^"]*)"$/, async func
   await this.anotherClientAdds(path, content);
 });
 
+When(/^another client replaces the file "([^"]*)" with "([^"]*)"$/, async function (this: DriveWorld, path: string, content: string) {
+  await this.anotherClientReplaces(path, content);
+});
+
 When(/^another client trashes "([^"]*)"$/, async function (this: DriveWorld, path: string) {
   await this.anotherClientTrashes(path);
 });
