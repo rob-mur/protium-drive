@@ -81,10 +81,7 @@
     {
       "id": "a-mount-refuses-a-folder-that-holds-files",
       "path": "spec/features/mount.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the mount is refused with exit status (\\d+) and a message that names the folder, and the folder still holds exactly \"([^\"]*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "sign-out-removes-the-session",
