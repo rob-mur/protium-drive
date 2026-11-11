@@ -80,6 +80,8 @@ export class DriveWorld extends World {
   signedIn = true;
   readonly faults: Fault[] = [];
   refusesNextRefresh = false;
+  /** Proton refused the stored session before the scenario's first When. */
+  sessionRefused = false;
   root?: string;
   host?: string;
   /** The user reaches the Drive through a mount; the first When at the mount point mounts it. */
@@ -96,6 +98,12 @@ export class DriveWorld extends World {
   readonly signIns: Running[] = [];
   /** A sign-in a When started and stopped once it printed its URL. */
   startedSignIn?: Running;
+  /** A sign-in a When started and let end on its own, or stopped after START_MS. */
+  signInAttempt?: Running;
+  /** Whether that sign-in ended on its own within START_MS. */
+  signInAttemptEnded?: boolean;
+  /** The serve the arrangement ran to have Proton refuse the stored session. */
+  private refusingServe?: Running;
   /** Whether the state directory held a session just before the user signed out. */
   sessionBeforeSignOut?: boolean;
   serve?: Serving;
@@ -195,6 +203,15 @@ export class DriveWorld extends World {
     this.signIns.push(await this.signIn());
   }
 
+  /** Starts `auth login` and gives it START_MS to end on its own; no one approves it. */
+  async trySigningIn(): Promise<void> {
+    await this.arrange();
+    const running = this.start(this.signInArgs());
+    this.signInAttempt = running;
+    this.signInAttemptEnded = await running.waitForEnd(START_MS);
+    if (!this.signInAttemptEnded) await running.stop();
+  }
+
   async askStatus(): Promise<void> {
     await this.arrange();
     this.answer = this.runBinary(["auth", "status", "--state-dir", this.dirs.state]);
@@ -237,6 +254,28 @@ export class DriveWorld extends World {
       this.trouble(`the arranged Drive could not be written: ${String(error)}`);
     }
     if (this.signedIn) this.setupSignIn = await this.signIn();
+    if (this.sessionRefused) await this.refuseTheSession();
+  }
+
+  /**
+   * Has Proton refuse the stored session: a serve whose account refuses the next refresh, an
+   * expired access token and one listing, then the serve stops.
+   */
+  private async refuseTheSession(): Promise<void> {
+    const port = await freePort();
+    const url = `http://127.0.0.1:${port}/`;
+    const running = this.start(this.serveArgs(port));
+    this.refusingServe = running;
+    if (!(await running.waitFor(() => answersHttp(url), START_MS))) {
+      this.trouble(`the serve that was to have the session refused did not answer on ${url}: ${running.describe()}`);
+    }
+    const control = Control.fromOutput(running.output);
+    if (control) {
+      await this.attempt("making the account refuse the next refresh", () => control.refuseNextRefresh());
+      await this.attempt("expiring the access token", () => control.expireAccessToken());
+      await new Rclone(url).list("");
+    } else this.trouble("the serve that was to have the session refused printed no control channel");
+    await running.stop();
   }
 
   private serveArgs(port: number): string[] {
@@ -537,6 +576,8 @@ export class DriveWorld extends World {
     const lines: string[] = ["What happened:"];
     if (this.setupSignIn) lines.push(`  signing in: ${this.setupSignIn.describe()}`);
     for (const signIn of this.signIns) lines.push(`  signing in: ${signIn.describe()}`);
+    if (this.refusingServe) lines.push(`  the serve that had the session refused: ${this.refusingServe.describe()}`);
+    if (this.signInAttempt) lines.push(`  trying to sign in: ${this.signInAttempt.describe()}`);
     if (this.startedSignIn) lines.push(`  starting to sign in: ${this.startedSignIn.describe()}`);
     if (this.serve) lines.push(`  the serve: ${this.serve.process.describe()}`);
     if (this.secondServe) lines.push(`  the second serve: ${this.secondServe.describe()}`);

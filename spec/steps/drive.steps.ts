@@ -66,6 +66,18 @@ Given(/^the user has signed in$/, function (this: DriveWorld) {
   this.signedIn = true;
 });
 
+Given(/^the user has not signed in$/, function (this: DriveWorld) {
+  this.signedIn = false;
+});
+
+Given(/^the Proton account refuses the next refresh$/, function (this: DriveWorld) {
+  this.refusesNextRefresh = true;
+});
+
+Given(/^Proton has refused the stored session$/, function (this: DriveWorld) {
+  this.sessionRefused = true;
+});
+
 Given(/^the user mounts the Drive at a folder$/, function (this: DriveWorld) {
   this.mounted = true;
 });

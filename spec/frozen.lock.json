@@ -95,6 +95,46 @@
       "id": "migrating-a-folder-gives-its-files-v4-node-keys",
       "path": "spec/features/argon2-node-keys.feature",
       "expected_status": "green"
+    },
+    {
+      "id": "a-serve-without-a-session-exits-as-needing-login",
+      "path": "spec/features/needs-login.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the serve exits (\\d+) saying \"(.*)\"$"
+      ]
+    },
+    {
+      "id": "a-serve-on-a-refused-session-exits-as-needing-login",
+      "path": "spec/features/needs-login.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the serve exits (\\d+) saying \"(.*)\"$"
+      ]
+    },
+    {
+      "id": "a-session-refused-mid-run-stops-the-serve-as-needing-login",
+      "path": "spec/features/needs-login.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the serve exits (\\d+) saying \"(.*)\"$"
+      ]
+    },
+    {
+      "id": "signing-in-while-the-serve-runs-is-refused",
+      "path": "spec/features/needs-login.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^signing in exits non-zero, naming the serve's process id, while the serve still answers$"
+      ]
+    },
+    {
+      "id": "signing-out-while-the-serve-runs-is-refused",
+      "path": "spec/features/needs-login.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^signing out exits non-zero, naming the serve's process id, and the state directory still holds \"([^\"]*)\"$"
+      ]
     }
   ]
 }

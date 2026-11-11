@@ -10,6 +10,20 @@ When(/^the user signs out$/, async function (this: DriveWorld) {
   await this.signOut();
 });
 
+When(/^the user tries to sign in again$/, async function (this: DriveWorld) {
+  await this.trySigningIn();
+});
+
+// --- the serve ------------------------------------------------------------------------------
+
+When(/^the user starts the serve$/, async function (this: DriveWorld) {
+  await this.startServe();
+});
+
+When(/^the access token expires$/, async function (this: DriveWorld) {
+  await this.expireAccessToken();
+});
+
 // --- a WebDAV client ------------------------------------------------------------------------
 
 When(/^the user lists "([^"]*)"(?: again)?$/, async function (this: DriveWorld, path: string) {
