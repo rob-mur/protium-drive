@@ -141,6 +141,38 @@
       "failing_step": [
         "^rclone holds the mount's credential in its environment, and no command line of the mount's processes holds it$"
       ]
+    },
+    {
+      "id": "listing-a-large-folder-loads-each-photo-once",
+      "path": "spec/features/listing-performance.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the listing shows (\\d+) files from \"([^\"]*)\" to \"([^\"]*)\", and the Drive loaded each of their nodes once$"
+      ]
+    },
+    {
+      "id": "listing-a-large-folder-again-loads-no-node",
+      "path": "spec/features/listing-performance.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the last listing shows (\\d+) files, and the Drive listed \"([^\"]*)\" once and loaded (\\d+) nodes in all$"
+      ]
+    },
+    {
+      "id": "reading-a-photo-in-a-listed-folder-lists-no-folder-again",
+      "path": "spec/features/listing-performance.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the read gives the photo's content, and the Drive listed \"([^\"]*)\" once$"
+      ]
+    },
+    {
+      "id": "a-restarted-serve-lists-a-large-folder-without-loading-its-nodes",
+      "path": "spec/features/listing-performance.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the last listing shows (\\d+) files, and the Drive loaded (\\d+) nodes in all$"
+      ]
     }
   ]
 }
