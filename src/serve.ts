@@ -6,6 +6,7 @@ import { DriveTree } from './drive/tree';
 import { acquireStateLock } from './session/lock';
 import type { FileCredentials } from './session/credentials';
 import { connect } from './proton/connect';
+import { guardAccess } from './webdav/access';
 import { createWebDavHandler } from './webdav/handler';
 import { FailedPutGuard, FAILED_PUT_GUARD_MS } from './webdav/guard';
 import { parsePath } from './webdav/paths';
@@ -34,14 +35,20 @@ export type ServeOptions = {
     root?: string;
     /** Resolves when the serve should stop; SIGINT and SIGTERM resolve it. */
     signal?: AbortSignal;
+    /**
+     * A per-run secret every request must carry as `Authorization: Bearer`. The mount sets it
+     * and hands it to rclone; a standalone serve has none and relies on the Host check alone.
+     */
+    credential?: string;
     /** Called once the server listens, with the URL it answers on. */
     onListening?: (url: URL) => void;
 };
 
 /**
  * Serves Proton Drive over WebDAV until the signal comes. It takes the state
- * lock, loads the session and refuses to start without one: the serve has no
- * authentication of its own, so its only gate is the signed-in session.
+ * lock, loads the session and refuses to start without one. Every request must name
+ * loopback or the listen address in its Host header (so a web page cannot reach it by
+ * DNS rebinding), and must carry `credential` when one is set.
  *
  * Without a usable session it exits with NEEDS_LOGIN, at the start or when Proton refuses
  * the session while it runs. Then the request that met the refusal still gets its 401.
@@ -73,12 +80,15 @@ export async function serveCommand(options: ServeOptions): Promise<number> {
             const server = startServer({
                 host,
                 port,
-                handler: createWebDavHandler({
-                    tree,
-                    logger,
-                    authProblem: () => authProblem(connection.credentials),
-                    guard: new FailedPutGuard(FAILED_PUT_GUARD_MS, connection.clock?.now.bind(connection.clock)),
-                }),
+                handler: guardAccess(
+                    createWebDavHandler({
+                        tree,
+                        logger,
+                        authProblem: () => authProblem(connection.credentials),
+                        guard: new FailedPutGuard(FAILED_PUT_GUARD_MS, connection.clock?.now.bind(connection.clock)),
+                    }),
+                    { host, credential: options.credential, logger },
+                ),
             });
             const watcher = new EventWatcher(sdk, tree, logger, {
                 authProblem: () => authProblem(connection.credentials),

@@ -39,8 +39,10 @@ Options:
   --state-dir DIR   Where the session file lives.
                     Default: $XDG_STATE_HOME/proton-drive-mount (~/.local/state/proton-drive-mount).
   --fake-drive DIR  Use the fake drive kept in DIR instead of Proton. Nothing reaches Proton.
-  --host HOST       Address for serve to listen on. Default: ${DEFAULT_HOST}. The server has no
-                    authentication of its own; keep it on loopback.
+  --host HOST       Address for serve to listen on. Default: ${DEFAULT_HOST}. The serve answers only
+                    requests that name localhost, 127.0.0.1, ::1 or HOST. serve has no password, so
+                    keep it on loopback; mount also gives rclone a fresh credential each run and
+                    refuses every request without it.
   --port PORT       Port for serve to listen on. Default: ${DEFAULT_PORT}.
   MOUNTPOINT        mount runs the serve and rclone mount, with the tested settings, and mounts
                     the Drive there. SIGINT or SIGTERM stops both and unmounts. mount creates

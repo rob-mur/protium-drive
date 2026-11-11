@@ -49,9 +49,9 @@ function fakeServe(order: string[], listensAt = 'http://127.0.0.1:4242/') {
 }
 
 /** An rclone that runs until it is asked to stop. */
-function fakeRclone(order: string[], calls: { args: string[] }[]) {
-    return (_exe: string, args: string[]): RcloneProcess => {
-        calls.push({ args });
+function fakeRclone(order: string[], calls: { args: string[]; env?: Record<string, string> }[]) {
+    return (_exe: string, args: string[], env?: Record<string, string>): RcloneProcess => {
+        calls.push({ args, env });
         order.push('rclone starts');
         let done!: (code: number) => void;
         const exited = new Promise<number>((resolve) => (done = resolve));
@@ -120,6 +120,34 @@ describe('mountCommand', () => {
         );
         expect(result).toBe(3);
         expect(order).toEqual(['rclone starts', 'rclone stops']);
+    });
+
+    test('gives the serve a fresh credential and rclone the same one in its environment, never in its arguments', async () => {
+        const credentials: (string | undefined)[] = [];
+        const calls: { args: string[]; env?: Record<string, string> }[] = [];
+        for (let run = 0; run < 2; run++) {
+            const abort = new AbortController();
+            const running = mountCommand(
+                { ...BASE, signal: abort.signal },
+                {
+                    serve: async (options) => {
+                        credentials.push(options.credential);
+                        return fakeServe([])(options);
+                    },
+                    startRclone: fakeRclone([], calls),
+                    rclone: 'rclone',
+                    prepareMountpoint: READY,
+                },
+            );
+            await new Promise((r) => setTimeout(r, 10));
+            abort.abort();
+            await running;
+        }
+        const [first, second] = credentials;
+        expect(first).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(second).not.toBe(first);
+        expect(calls.map((call) => call.env?.RCLONE_WEBDAV_BEARER_TOKEN)).toEqual(credentials);
+        for (const call of calls) expect(call.args.join(' ')).not.toContain(call.env!.RCLONE_WEBDAV_BEARER_TOKEN!);
     });
 
     test('returns the serve code without starting rclone when the serve ends before it listens', async () => {

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 
 import type { Logger } from '../vendor/proton-drive-sdk-account';
 
@@ -42,8 +43,9 @@ export interface RcloneProcess {
     stop(): void;
 }
 
-export function spawnRclone(executable: string, args: string[]): RcloneProcess {
-    const child = spawn(executable, args, { stdio: ['ignore', 'inherit', 'inherit'] });
+/** Starts rclone with `env` added to this process's environment. */
+export function spawnRclone(executable: string, args: string[], env: Record<string, string> = {}): RcloneProcess {
+    const child = spawn(executable, args, { stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, ...env } });
     const exited = new Promise<number>((resolve) => {
         child.once('error', () => resolve(127));
         child.once('close', (code, signal) => resolve(code ?? (signal ? 128 : 1)));
@@ -57,11 +59,11 @@ export function spawnRclone(executable: string, args: string[]): RcloneProcess {
     };
 }
 
-export type MountOptions = Omit<ServeOptions, 'onListening'> & { mountpoint: string };
+export type MountOptions = Omit<ServeOptions, 'onListening' | 'credential'> & { mountpoint: string };
 
 export interface MountDeps {
     serve: (options: ServeOptions) => Promise<number>;
-    startRclone: (executable: string, args: string[]) => RcloneProcess;
+    startRclone: (executable: string, args: string[], env: Record<string, string>) => RcloneProcess;
     /** The rclone executable: the one the package pins. */
     rclone: string;
     /** Makes the mountpoint an empty folder rclone can mount on, or says why it will not. */
@@ -81,6 +83,10 @@ export function mountDeps(env: NodeJS.ProcessEnv = process.env): MountDeps {
  * Makes the mountpoint ready (see prepareMountpoint) before anything starts, then
  * runs the serve and an rclone mount of it until the signal comes, then stops rclone (which
  * unmounts) and then the serve. Either one ending on its own ends the other.
+ *
+ * Each run makes a fresh credential that the serve demands on every request. rclone gets it
+ * in its environment, which only this user can read, and never on its command line, which
+ * every user can.
  */
 export async function mountCommand(options: MountOptions, deps: MountDeps = mountDeps()): Promise<number> {
     const { mountpoint, signal, logger } = options;
@@ -92,12 +98,13 @@ export async function mountCommand(options: MountOptions, deps: MountDeps = moun
     const serveStop = new AbortController();
     let listening!: (url: URL) => void;
     const listens = new Promise<URL>((resolve) => (listening = resolve));
-    const served = deps.serve({ ...options, signal: serveStop.signal, onListening: listening });
+    const credential = randomBytes(32).toString('base64url');
+    const served = deps.serve({ ...options, credential, signal: serveStop.signal, onListening: listening });
     const first = await Promise.race([listens, served]);
     if (typeof first === 'number') {
         return first;
     }
-    const rclone = deps.startRclone(deps.rclone, rcloneArgs(mountpoint, first));
+    const rclone = deps.startRclone(deps.rclone, rcloneArgs(mountpoint, first), { RCLONE_WEBDAV_BEARER_TOKEN: credential });
     logger.info(`Mounting ${first.href} at ${mountpoint}`);
     const aborted = new Promise<'signal'>((resolve) => {
         if (signal?.aborted) resolve('signal');
