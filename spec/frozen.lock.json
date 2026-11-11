@@ -117,6 +117,30 @@
       "id": "signing-out-while-the-serve-runs-is-refused",
       "path": "spec/features/needs-login.feature",
       "expected_status": "green"
+    },
+    {
+      "id": "a-request-under-a-foreign-name-is-refused",
+      "path": "spec/features/local-access.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the serve refuses the web page as misdirected, and the Drive did not list \"([^\"]*)\"$"
+      ]
+    },
+    {
+      "id": "the-mount-refuses-a-request-without-its-credential",
+      "path": "spec/features/local-access.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the mount's port refuses the program as unauthorised, and the Drive did not list \"([^\"]*)\"$"
+      ]
+    },
+    {
+      "id": "the-mount-keeps-its-credential-off-the-command-line",
+      "path": "spec/features/local-access.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^rclone holds the mount's credential in its environment, and no command line of the mount's processes holds it$"
+      ]
     }
   ]
 }

@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { DriveSeed, parentOf } from "../support/drive-seed.ts";
 import { type Answer, Binary, type Home, indent, type Running } from "../support/send/binary.ts";
 import { type CallCounts, Control, type Fault } from "../support/send/control.ts";
+import { type LocalAnswer, type ProcessView, processTree, rawRequest } from "../support/send/local.ts";
 import { isMounted, leaveKilledMount, listMounted, mountIds, type MountOutcome, readMounted, unmount, writeMounted } from "../support/send/mount.ts";
 import { describe as describeOutcome, type Outcome, Rclone, refusal } from "../support/send/rclone.ts";
 import { propfindWholeTree, type RawAnswer } from "../support/send/webdav.ts";
@@ -59,6 +60,16 @@ export interface Action {
   kind: ActionKind;
   path: string;
   outcome: Outcome;
+  callsBefore?: CallCounts;
+  callsAfter?: CallCounts;
+}
+
+/** One request another program on the machine sent straight to the port. */
+export interface LocalRequestRecord {
+  /** What the program was, for the failure message. */
+  who: string;
+  path: string;
+  answer: LocalAnswer;
   callsBefore?: CallCounts;
   callsAfter?: CallCounts;
 }
@@ -116,6 +127,9 @@ export class DriveWorld extends World {
   mountedWrite?: MountOutcome;
   /** A `mount` a When ran to its end, and what the folder held after it. */
   mountRun?: { answer: Answer; folderAfter?: string[] };
+  readonly localRequests: LocalRequestRecord[] = [];
+  /** The mount's processes, as another program read them from the process table. */
+  mountProcesses?: ProcessView[];
   /** The `migrate-node-keys` run a When made. */
   migration?: { path: string; answer: Answer };
   /** What went wrong while acting, for the Then's failure message. */
@@ -556,6 +570,37 @@ export class DriveWorld extends World {
     this.mountedWrite = await writeMounted(join(mountpoint, path), new TextEncoder().encode(text));
   }
 
+  // --- other programs on the same machine -------------------------------------------
+
+  /** A web page that reached the serve's port under a name of its own, by DNS rebinding. */
+  async listAsForeignSite(path: string): Promise<void> {
+    const serving = await this.ensureServing();
+    await this.sendLocal(serving, "a web page at evil.example", path, `evil.example:${new URL(serving.url).port}`);
+  }
+
+  /** A program that lists `path` at the mount's port without the mount's credential. */
+  async listAtMountWithoutCredential(path: string): Promise<void> {
+    const mount = await this.ensureMounted();
+    await this.sendLocal(mount, "a program without the mount's credential", path, new URL(mount.url).host);
+  }
+
+  private async sendLocal(serving: Serving, who: string, path: string, host: string): Promise<void> {
+    const callsBefore = await this.calls(serving);
+    const answer = await rawRequest(serving.url, { method: "PROPFIND", path, host });
+    this.localRequests.push({ who, path, answer, callsBefore, callsAfter: await this.calls(serving) });
+  }
+
+  /** A program that reads the mount's processes from the process table, as `ps` does. */
+  async readMountProcesses(): Promise<void> {
+    const mount = await this.ensureMounted();
+    const pid = mount.process.pid;
+    if (pid === undefined) {
+      this.trouble("the mount has no process id to read");
+      return;
+    }
+    this.mountProcesses = processTree(pid);
+  }
+
   // --- the record -----------------------------------------------------------------
 
   trouble(text: string): void {
@@ -585,6 +630,7 @@ export class DriveWorld extends World {
     if (this.mountRun) lines.push(indent(`mounting: exited ${this.mountRun.answer.exitCode}\n${this.mountRun.answer.stdout}${this.mountRun.answer.stderr}`.trimEnd()));
     if (this.migration) lines.push(indent(`migrating the node keys under ${this.migration.path}: exited ${this.migration.answer.exitCode}\n${this.migration.answer.stdout}${this.migration.answer.stderr}`.trimEnd()));
     for (const action of this.actions) lines.push(indent(`${action.kind} ${action.path}: ${describeOutcome(action.outcome)}`));
+    for (const request of this.localRequests) lines.push(indent(`${request.who} listed ${request.path}:\n${request.answer.text}`.trimEnd()));
     for (const trouble of this.troubles) lines.push(`  trouble: ${trouble}`);
     return lines.join("\n");
   }
