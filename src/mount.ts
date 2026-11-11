@@ -70,14 +70,21 @@ export function cacheSettings(flags: CacheFlags): CacheSettings | string {
     return cacheDir === undefined ? { dirCacheTime, vfsCacheMaxSize } : { dirCacheTime, vfsCacheMaxSize, cacheDir };
 }
 
-/** The arguments that mount the serve at `url` onto `mountpoint` as a `:webdav:` remote. */
+/**
+ * The arguments that mount the serve at `url` onto `mountpoint` as a `:webdav:` remote.
+ *
+ * Vendor `rclone` gives the WebDAV backend a modification-time precision, so the VFS cache
+ * fingerprint holds the size and the modification time. With vendor `other` the fingerprint is
+ * the size only, and a same-size edit from another device stays stale in the cache (#63).
+ * Not `owncloud`: it also sets modification times with PROPPATCH, which the serve does not have.
+ */
 export function rcloneArgs(mountpoint: string, url: URL, cache: CacheSettings): string[] {
     return [
         'mount',
         ':webdav:',
         mountpoint,
         `--webdav-url=${url.href}`,
-        '--webdav-vendor=other',
+        '--webdav-vendor=rclone',
         ...RCLONE_SETTINGS.flat().filter((part): part is string => part !== undefined),
         '--dir-cache-time',
         cache.dirCacheTime,

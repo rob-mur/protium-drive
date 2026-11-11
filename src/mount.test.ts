@@ -7,11 +7,12 @@ import type { ServeOptions } from './serve.ts';
 const QUIET = createLogger({ PDM_LOG_LEVEL: 'error' });
 
 describe('rcloneArgs', () => {
-    test('mounts the serve as a :webdav: remote of vendor other, with the tested settings', () => {
+    test('mounts the serve as a :webdav: remote of vendor rclone, so a same-size remote edit shows, with the tested settings', () => {
         const args = rcloneArgs('/mnt/drive', new URL('http://127.0.0.1:7395/'), DEFAULT_CACHE);
         expect(args.slice(0, 3)).toEqual(['mount', ':webdav:', '/mnt/drive']);
         expect(args).toContain('--webdav-url=http://127.0.0.1:7395/');
-        expect(args).toContain('--webdav-vendor=other');
+        expect(args).toContain('--webdav-vendor=rclone');
+        expect(args).not.toContain('--webdav-vendor=other');
         for (const [flag, value] of RCLONE_SETTINGS) {
             const at = args.indexOf(flag);
             expect(at).toBeGreaterThan(-1);
