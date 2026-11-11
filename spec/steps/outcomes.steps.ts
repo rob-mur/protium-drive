@@ -73,3 +73,19 @@ Then(
     claim(JSON.stringify(listed) === JSON.stringify(want), () => `the mounted folder "${folder}" holds ${JSON.stringify(listed)}, not ${JSON.stringify(want)}`);
   },
 );
+
+Then(
+  /^the mount is refused with exit status (\d+) and a message that names the folder, and the folder still holds exactly "([^"]*)"$/,
+  function (this: DriveWorld, status: string, names: string) {
+    const run = this.mountRun;
+    claim(run, () => `no mount ran to its end.\n${this.whatHappened()}`);
+    const want = names.split(", ").sort();
+    claim(
+      JSON.stringify(run.folderAfter?.sort()) === JSON.stringify(want),
+      () => `the folder holds ${JSON.stringify(run.folderAfter)}, not ${JSON.stringify(want)}.\n${this.whatHappened()}`,
+    );
+    claim(run.answer.exitCode === Number(status), () => `the mount exited ${run.answer.exitCode}, not ${status}.\n${this.whatHappened()}`);
+    const message = `${run.answer.stdout}${run.answer.stderr}`;
+    claim(message.includes(this.dirs.mountpoint), () => `the mount's message does not name ${this.dirs.mountpoint}: ${message}`);
+  },
+);

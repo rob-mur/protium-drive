@@ -12,14 +12,14 @@
 //   the Drive after a write polls the control channel with a bound; nothing sleeps.
 import { answersHttp, freePort, poll } from "@cd-pipeline/support";
 import { After, type IWorldOptions, setDefaultTimeout, setWorldConstructor, World } from "@cucumber/cucumber";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { DriveSeed, parentOf } from "../support/drive-seed.ts";
 import { type Answer, Binary, type Home, indent, type Running } from "../support/send/binary.ts";
 import { type CallCounts, Control, type Fault } from "../support/send/control.ts";
-import { isMounted, listMounted, type MountOutcome, readMounted, unmount, writeMounted } from "../support/send/mount.ts";
+import { isMounted, leaveKilledMount, listMounted, mountIds, type MountOutcome, readMounted, unmount, writeMounted } from "../support/send/mount.ts";
 import { describe as describeOutcome, type Outcome, Rclone, refusal } from "../support/send/rclone.ts";
 import { propfindWholeTree, type RawAnswer } from "../support/send/webdav.ts";
 
@@ -84,6 +84,8 @@ export class DriveWorld extends World {
   host?: string;
   /** The user reaches the Drive through a mount; the first When at the mount point mounts it. */
   mounted = false;
+  /** The folder the user mounts the Drive at, before the mount: an empty folder unless a Given says otherwise. */
+  mountFolder: { kind: "empty" } | { kind: "missing" } | { kind: "left mounted" } | { kind: "holds"; file: string } = { kind: "empty" };
 
   // --- what the Whens record --------------------------------------------------
   /** The UID of each node the arranged Drive held, by path. */
@@ -104,6 +106,8 @@ export class DriveWorld extends World {
   wholeTree?: { answer: RawAnswer; callsBefore?: CallCounts; callsAfter?: CallCounts };
   mountedRead?: { file: MountOutcome; folder: MountOutcome };
   mountedWrite?: MountOutcome;
+  /** A `mount` a When ran to its end, and what the folder held after it. */
+  mountRun?: { answer: Answer; folderAfter?: string[] };
   /** The `migrate-node-keys` run a When made. */
   migration?: { path: string; answer: Answer };
   /** What went wrong while acting, for the Then's failure message. */
@@ -113,6 +117,8 @@ export class DriveWorld extends World {
   private arranged = false;
   private faultsSet = false;
   private readonly processes: Running[] = [];
+  /** The ids of the dead mounts the arranged folder was left with; a new mount is any other. */
+  private deadMounts?: string[];
 
   constructor(options: IWorldOptions) {
     super(options);
@@ -453,18 +459,50 @@ export class DriveWorld extends World {
     await this.arrange();
     if (!this.mounted) this.trouble("no Given said the user mounts the Drive, yet a step used the mount point");
     if (this.mount?.process.running) return this.mount;
-    const mountpoint = this.dirs.mountpoint;
-    mkdirSync(mountpoint, { recursive: true });
+    const mountpoint = await this.prepareMountFolder();
+    const dead = this.deadMounts ?? [];
     const port = await freePort();
     const running = this.start(["mount", mountpoint, "--port", String(port), "--state-dir", this.dirs.state, "--fake-drive", this.dirs.drive]);
     const mount: Serving & { mountpoint: string } = { process: running, url: `http://127.0.0.1:${port}/`, mountpoint };
     this.mount = mount;
-    if (!(await running.waitFor(() => isMounted(mountpoint), MOUNT_MS))) {
+    if (!(await running.waitFor(() => mountIds(mountpoint).some((id) => !dead.includes(id)), MOUNT_MS))) {
       this.trouble(`nothing was mounted at ${mountpoint} within ${MOUNT_MS / 1000} s: ${running.describe()}`);
     }
     mount.control = Control.fromOutput(running.output);
     await this.setFaults(mount);
     return mount;
+  }
+
+  /** Makes the folder the user mounts the Drive at as the Givens arranged it, once, and gives its path. */
+  private async prepareMountFolder(): Promise<string> {
+    const mountpoint = this.dirs.mountpoint;
+    if (this.deadMounts) return mountpoint;
+    this.deadMounts = [];
+    const folder = this.mountFolder;
+    if (folder.kind === "missing") return mountpoint;
+    mkdirSync(mountpoint, { recursive: true });
+    if (folder.kind === "holds") writeFileSync(join(mountpoint, folder.file), "");
+    if (folder.kind === "left mounted") {
+      const left = await leaveKilledMount(mountpoint);
+      if ("failure" in left) this.trouble(`the folder could not be left mounted by a killed mount: ${left.failure}`);
+      else this.deadMounts = left.ids;
+    }
+    return mountpoint;
+  }
+
+  /** Runs `mount` on the arranged folder until it ends on its own, and records what the folder held after. */
+  async mountAtFolder(): Promise<void> {
+    await this.arrange();
+    const mountpoint = await this.prepareMountFolder();
+    const port = await freePort();
+    const answer = this.runBinary(["mount", mountpoint, "--port", String(port), "--state-dir", this.dirs.state, "--fake-drive", this.dirs.drive]);
+    let folderAfter: string[] | undefined;
+    try {
+      folderAfter = readdirSync(mountpoint);
+    } catch (error: unknown) {
+      this.trouble(`the folder could not be listed after the mount: ${String(error)}`);
+    }
+    this.mountRun = { answer, folderAfter };
   }
 
   async readMountedFile(path: string): Promise<void> {
@@ -503,6 +541,7 @@ export class DriveWorld extends World {
     if (this.serve) lines.push(`  the serve: ${this.serve.process.describe()}`);
     if (this.secondServe) lines.push(`  the second serve: ${this.secondServe.describe()}`);
     if (this.mount) lines.push(`  the mount: ${this.mount.process.describe()}`);
+    if (this.mountRun) lines.push(indent(`mounting: exited ${this.mountRun.answer.exitCode}\n${this.mountRun.answer.stdout}${this.mountRun.answer.stderr}`.trimEnd()));
     if (this.migration) lines.push(indent(`migrating the node keys under ${this.migration.path}: exited ${this.migration.answer.exitCode}\n${this.migration.answer.stdout}${this.migration.answer.stderr}`.trimEnd()));
     for (const action of this.actions) lines.push(indent(`${action.kind} ${action.path}: ${describeOutcome(action.outcome)}`));
     for (const trouble of this.troubles) lines.push(`  trouble: ${trouble}`);

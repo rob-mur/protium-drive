@@ -54,6 +54,10 @@ When(/^the user reads the mounted file "([^"]*)"$/, async function (this: DriveW
   await this.readMountedFile(path);
 });
 
+When(/^the user mounts the Drive at that folder$/, async function (this: DriveWorld) {
+  await this.mountAtFolder();
+});
+
 When(/^the user writes "([^"]*)" to the mounted file "([^"]*)"$/, async function (this: DriveWorld, content: string, path: string) {
   await this.writeMountedFile(path, content);
 });

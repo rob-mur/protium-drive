@@ -14,3 +14,26 @@ Feature: Mounting the Drive as a folder
     And the user mounts the Drive at a folder
     When the user writes "sand and snow" to the mounted file "Photos/new.jpg"
     Then within 60 seconds the Drive holds "Photos/new.jpg" containing "sand and snow"
+
+  @id:a-mount-starts-on-a-folder-a-killed-mount-left
+  Scenario: A mount starts on a folder that a killed mount left behind
+    Given a Drive whose My files holds the file "Photos/beach.jpg" containing "sand and sea"
+    And the folder the user mounts the Drive at was left mounted by a mount that was killed
+    And the user mounts the Drive at a folder
+    When the user reads the mounted file "Photos/beach.jpg"
+    Then the mounted file holds "sand and sea", and the mounted folder "Photos" holds exactly "beach.jpg"
+
+  @id:a-mount-creates-its-folder-when-it-does-not-exist
+  Scenario: A mount creates the folder it mounts at when the folder does not exist
+    Given a Drive whose My files holds the file "Photos/beach.jpg" containing "sand and sea"
+    And the folder the user mounts the Drive at does not exist
+    And the user mounts the Drive at a folder
+    When the user reads the mounted file "Photos/beach.jpg"
+    Then the mounted file holds "sand and sea", and the mounted folder "Photos" holds exactly "beach.jpg"
+
+  @id:a-mount-refuses-a-folder-that-holds-files
+  Scenario: A mount refuses a folder that already holds files
+    Given a Drive whose My files holds the folder "Photos"
+    And the folder the user mounts the Drive at holds the file "notes.txt"
+    When the user mounts the Drive at that folder
+    Then the mount is refused with exit status 2 and a message that names the folder, and the folder still holds exactly "notes.txt"

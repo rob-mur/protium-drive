@@ -69,3 +69,15 @@ Given(/^the user has signed in$/, function (this: DriveWorld) {
 Given(/^the user mounts the Drive at a folder$/, function (this: DriveWorld) {
   this.mounted = true;
 });
+
+Given(/^the folder the user mounts the Drive at does not exist$/, function (this: DriveWorld) {
+  this.mountFolder = { kind: "missing" };
+});
+
+Given(/^the folder the user mounts the Drive at holds the file "([^"]*)"$/, function (this: DriveWorld, file: string) {
+  this.mountFolder = { kind: "holds", file };
+});
+
+Given(/^the folder the user mounts the Drive at was left mounted by a mount that was killed$/, function (this: DriveWorld) {
+  this.mountFolder = { kind: "left mounted" };
+});
