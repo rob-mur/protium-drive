@@ -25,12 +25,14 @@ export interface Home {
  * The environment of every run of the binary: the suite's own, a home of the scenario's, and a
  * proxy that refuses every connection. The suite never reaches Proton: under `--fake-drive` the
  * binary makes no request of its own, and a command that runs without the switch and tries one
- * meets the refusing proxy rather than Proton.
+ * meets the refusing proxy rather than Proton. A run is never a systemd service unless a step
+ * makes it one: the suite's own `NOTIFY_SOCKET`, if it has one, does not pass on.
  */
-function environment(home: Home | undefined): NodeJS.ProcessEnv {
+function environment(home: Home | undefined, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const refused = "http://127.0.0.1:9";
+  const { NOTIFY_SOCKET: _suites, ...inherited } = process.env;
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...inherited,
     HTTP_PROXY: refused,
     HTTPS_PROXY: refused,
     http_proxy: refused,
@@ -45,7 +47,7 @@ function environment(home: Home | undefined): NodeJS.ProcessEnv {
     env.XDG_CACHE_HOME = `${home.home}/.cache`;
     env.XDG_DATA_HOME = `${home.home}/.local/share`;
   }
-  return env;
+  return { ...env, ...extra };
 }
 
 export class Binary {
@@ -86,9 +88,9 @@ export class Binary {
     return { exitCode: result.status ?? -1, stdout: result.stdout, stderr: result.stderr };
   }
 
-  /** Starts a command that runs until it is stopped, such as `serve`. */
-  start(args: string[], home?: Home): Running {
-    return start(this.path, args, { env: environment(home) });
+  /** Starts a command that runs until it is stopped, such as `serve`, with `env` added to its environment. */
+  start(args: string[], home?: Home, env?: Record<string, string>): Running {
+    return start(this.path, args, { env: environment(home, env) });
   }
 }
 

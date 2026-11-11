@@ -72,6 +72,10 @@ When(/^the user reads the mounted file "([^"]*)"$/, async function (this: DriveW
   await this.readMountedFile(path);
 });
 
+When(/^the mount starts$/, async function (this: DriveWorld) {
+  await this.startMount();
+});
+
 When(/^the user mounts the Drive at that folder$/, async function (this: DriveWorld) {
   await this.mountAtFolder();
 });

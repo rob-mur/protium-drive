@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { Control, type CallCounts } from "../support/send/control.ts";
 import { listMounted, type MountOutcome, readMounted } from "../support/send/mount.ts";
 import { claim, decode, last, refusedWith, type Row, says, showsExactly, sum } from "./claims.ts";
-import { DIR_CACHE_TIME_FLAG, type DriveWorld } from "./world.ts";
+import { DIR_CACHE_TIME_FLAG, type DriveWorld, mountedLines } from "./world.ts";
 
 function method(calls: CallCounts | undefined, name: string): number {
   return calls?.methods[name] ?? 0;
@@ -77,6 +77,23 @@ Then(
     claim(JSON.stringify(listed) === JSON.stringify(want), () => `the mounted folder "${folder}" holds ${JSON.stringify(listed)}, not ${JSON.stringify(want)}`);
   },
 );
+
+Then(/^the mount's own process told systemd READY=1, and the folder was mounted when it did$/, function (this: DriveWorld) {
+  const mount = this.mount;
+  claim(mount, () => `no mount started.\n${this.whatHappened()}`);
+  const pid = mount.process.pid;
+  const ready = this.readiness.notifications.find((n) => n.pid === pid && n.text.split("\n").includes("READY=1"));
+  claim(ready, () => `the mount's process (pid ${pid}) never told systemd READY=1.\n${this.whatHappened()}`);
+  claim(ready.mounted, () => `the mount told systemd READY=1 before ${mount.mountpoint} was mounted.\n${this.whatHappened()}`);
+});
+
+Then(/^the mount printed one line that says it is mounted at the folder, and the folder was mounted when it did$/, function (this: DriveWorld) {
+  const mount = this.mount;
+  claim(mount, () => `no mount started.\n${this.whatHappened()}`);
+  const lines = mountedLines(mount.process.output, mount.mountpoint);
+  claim(lines.length === 1, () => `the mount printed ${lines.length} lines that say it is mounted at ${mount.mountpoint}, not 1.\n${this.whatHappened()}`);
+  claim(this.readiness.line?.mounted, () => `the mount said it was mounted at ${mount.mountpoint} before the folder was mounted.\n${this.whatHappened()}`);
+});
 
 Then(
   /^the mount is refused with exit status (\d+) and a message that names the folder, and the folder still holds exactly "([^"]*)"$/,
