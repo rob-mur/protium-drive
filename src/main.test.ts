@@ -10,6 +10,7 @@ import { VERSION } from './version.ts';
 
 import { HELP, THIRD_PARTY_NOTICE, run, runCommand, versionAnswer, authStatus, authLogout } from './main.ts';
 import { SessionFileStore } from './session/store.ts';
+import { acquireStateLock } from './session/lock.ts';
 import { FakeDrive } from '../fake-drive/drive.ts';
 import { TEMPORARY_SUFFIX } from './migrate.ts';
 
@@ -368,6 +369,19 @@ describe('auth status', () => {
         expect(code).toBe(0);
         expect(await store.load()).toBeNull();
         expect(printed.join('\n')).toContain('Proton keeps the session until it expires');
+    });
+
+    test('refuses while another process holds the state lock, naming its pid, and keeps the session file', async () => {
+        const stateDir = mkdtemp('logout-locked');
+        const store = new SessionFileStore(stateDir);
+        await store.save(storedSession());
+        const release = await acquireStateLock(stateDir);
+        try {
+            await expect(authLogout(stateDir, { print: () => {}, error: () => {} })).rejects.toThrow(`pid ${process.pid}`);
+        } finally {
+            await release();
+        }
+        expect(await store.load()).not.toBeNull();
     });
 
     test('without a session it says so and exits 0', async () => {

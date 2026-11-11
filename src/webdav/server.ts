@@ -3,6 +3,8 @@ import type { WebDavHandler } from './handler';
 /** Large enough for any single file; PUT bodies stream, so this is a limit, not a buffer. */
 const MAX_REQUEST_BODY_BYTES = 1024 ** 4;
 
+export const GRACEFUL_STOP_MS = 5_000;
+
 export type ServerOptions = {
     host: string;
     port: number;
@@ -12,7 +14,8 @@ export type ServerOptions = {
 export type RunningServer = {
     url: URL;
     port: number;
-    stop(): Promise<void>;
+    /** `graceful`: let the requests in flight finish, for at most GRACEFUL_STOP_MS. */
+    stop(graceful?: boolean): Promise<void>;
 };
 
 export function startServer(options: ServerOptions): RunningServer {
@@ -28,6 +31,15 @@ export function startServer(options: ServerOptions): RunningServer {
     return {
         url: server.url,
         port: server.port ?? options.port,
-        stop: () => server.stop(true),
+        stop: async (graceful = false) => {
+            if (graceful) {
+                const finished = await Promise.race([
+                    server.stop(false).then(() => true),
+                    new Promise<false>((resolve) => setTimeout(resolve, GRACEFUL_STOP_MS, false)),
+                ]);
+                if (finished) return;
+            }
+            await server.stop(true);
+        },
     };
 }

@@ -12,6 +12,7 @@ import { VERSION as SDK_VERSION } from '@protontech/drive-sdk';
 import { authLogin } from './auth/login.ts';
 import { createLogger } from './logger.ts';
 import { resolveStateDir } from './paths.ts';
+import { acquireStateLock } from './session/lock.ts';
 import { SessionFileStore } from './session/store.ts';
 import { THIRD_PARTY_NOTICE } from './notice.ts';
 import { migrateNodeKeysCommand } from './migrate.ts';
@@ -51,6 +52,15 @@ Options:
                     and finishes a copy a stopped run left. Stop the serve and the mount first: it
                     takes the same state lock.
   --dry-run         migrate-node-keys only lists the files it would migrate; it changes nothing.
+
+Exit status:
+  0    Success.
+  1    An error, for example another proton-drive-mount process holds the state directory
+       (auth login and auth logout refuse while a serve or mount runs).
+  2    Usage error.
+  3    Needs login: serve or mount has no session, or Proton refused it. Run "auth login",
+       then start it again. A user service should not restart on 3.
+  130  Interrupted.
 `;
 
 export function versionAnswer(env: NodeJS.ProcessEnv = process.env): string {
@@ -120,10 +130,17 @@ export async function authStatus(stateDir: string, output: Output = CONSOLE_OUTP
 
 /**
  * Deletes the local session file. It never calls Proton, so Proton keeps the
- * session until it expires or the user revokes it there.
+ * session until it expires or the user revokes it there. It takes the state
+ * lock, so it refuses while a serve uses the session.
  */
 export async function authLogout(stateDir: string, output: Output = CONSOLE_OUTPUT): Promise<number> {
-    const removed = await new SessionFileStore(stateDir).remove();
+    const release = await acquireStateLock(stateDir);
+    let removed: boolean;
+    try {
+        removed = await new SessionFileStore(stateDir).remove();
+    } finally {
+        await release();
+    }
     output.print(removed ? 'Signed out: the local session file is deleted.' : 'Not signed in: there was no session file to delete.');
     if (removed) {
         output.print('Proton keeps the session until it expires; revoke it in your Proton account settings to end it sooner.');

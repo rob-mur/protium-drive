@@ -18,6 +18,18 @@ The working prototype lives on the branch `prototype/webdav-mount` (`7bff71f`). 
 behaviour reference for the tickets: its README describes `auth`, `serve`, the WebDAV methods,
 the rclone settings and the manual live test. It never merges to `main`.
 
+## Exit status
+
+| Status | Meaning |
+|--------|---------|
+| 0 | Success. |
+| 1 | An error. For example, another proton-drive-mount process holds the state directory: `auth login` and `auth logout` refuse while a `serve` or `mount` runs, and name its process id. |
+| 2 | Usage error. |
+| 3 | Needs login. `serve` or `mount` found no session, or Proton refused the stored session at the start or while it ran. Run `proton-drive-mount auth login`, then start it again. |
+| 130 | Interrupted. |
+
+A user service should not restart on 3: with systemd, set `RestartPreventExitStatus=3`.
+
 ## Rules every change keeps
 
 From the [SDK README](https://github.com/ProtonDriveApps/sdk#usage-guidelines-for-personal-projects):

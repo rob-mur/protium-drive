@@ -1,6 +1,7 @@
 import type { Logger } from '../../vendor/proton-drive-sdk-account';
 
 import { connect } from '../proton/connect';
+import { acquireStateLock } from '../session/lock';
 import { SessionFileStore } from '../session/store';
 import { APP_VERSION } from '../version';
 import { THIRD_PARTY_NOTICE } from '../notice';
@@ -25,11 +26,23 @@ export type LoginOptions = {
  * Signs in through the session-fork flow: it prints a sign-in URL, the user
  * approves it in a browser, and it never asks for a password. The session the
  * approval issues is saved whole by the credentials, then the command ends.
+ * It holds the state lock throughout, so it cannot replace the session of a
+ * running serve or race another sign-in.
  */
 export async function authLogin(options: LoginOptions): Promise<number> {
-    const { stateDir, logger, fakeDriveDir, signal } = options;
+    const { stateDir } = options;
     const print = options.print ?? ((line: string) => console.log(line));
     const store = new SessionFileStore(stateDir);
+    const release = await acquireStateLock(stateDir);
+    try {
+        return await signIn(store, options, print);
+    } finally {
+        await release();
+    }
+}
+
+async function signIn(store: SessionFileStore, options: LoginOptions, print: (line: string) => void): Promise<number> {
+    const { stateDir, logger, fakeDriveDir, signal } = options;
     const connection = await connect({ stateDir, logger, fakeDriveDir, onControlUrl: options.onControlUrl });
     try {
         if (await store.load()) {

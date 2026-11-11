@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 
 import { authLogin, REPLACE_WARNING } from './login.ts';
+import { acquireStateLock } from '../session/lock.ts';
 import { SessionFileStore } from '../session/store.ts';
 import { APP_VERSION } from '../version.ts';
 import { THIRD_PARTY_NOTICE } from '../notice.ts';
@@ -107,6 +108,44 @@ describe('authLogin', () => {
         const lines: string[] = [];
         await signIn(scratch('state'), scratch('drive'), lines);
         expect(lines.some((line) => line.includes('A session already exists'))).toBeFalse();
+    });
+
+    test('refuses while another process holds the state lock, naming its pid, and keeps the session', async () => {
+        const stateDir = scratch('state');
+        const driveDir = scratch('drive');
+        await signIn(stateDir, driveDir, []);
+        const before = await new SessionFileStore(stateDir).load();
+        const release = await acquireStateLock(stateDir);
+        const lines: string[] = [];
+        try {
+            await expect(authLogin({ stateDir, logger: QUIET, fakeDriveDir: driveDir, print: (l) => lines.push(l) })).rejects.toThrow(`pid ${process.pid}`);
+        } finally {
+            await release();
+        }
+        expect(lines).toEqual([]);
+        expect(await new SessionFileStore(stateDir).load()).toEqual(before);
+    });
+
+    test('holds the state lock until the sign-in ends, so a serve cannot start meanwhile', async () => {
+        const stateDir = scratch('state');
+        let urlIsOut!: () => void;
+        const urlSeen = new Promise<void>((resolve) => (urlIsOut = resolve));
+        let controlUrl: URL | undefined;
+        const done = authLogin({
+            stateDir,
+            logger: QUIET,
+            fakeDriveDir: scratch('drive'),
+            print: (line) => {
+                if (/^https:\/\/\S+$/.test(line.trim())) urlIsOut();
+            },
+            onControlUrl: (url) => (controlUrl = url),
+        });
+        await urlSeen;
+        await expect(acquireStateLock(stateDir)).rejects.toThrow(`pid ${process.pid}`);
+        await fetch(new URL('account/approve', controlUrl), { method: 'POST' });
+        expect(await done).toBe(0);
+        const release = await acquireStateLock(stateDir);
+        await release();
     });
 
     test('an aborted sign-in does not save a session', async () => {

@@ -98,6 +98,25 @@ describe('mountCommand', () => {
         expect(order).toEqual(['serve starts', 'serve stops']);
     });
 
+    test('stops rclone and passes on the needs-login status 3 when the serve ends with it', async () => {
+        const order: string[] = [];
+        const calls: { args: string[] }[] = [];
+        const result = await mountCommand(
+            { ...BASE },
+            {
+                serve: async (options) => {
+                    options.onListening?.(new URL('http://127.0.0.1:4242/'));
+                    await new Promise((r) => setTimeout(r, 10));
+                    return 3;
+                },
+                rclone: 'rclone',
+                startRclone: fakeRclone(order, calls),
+            },
+        );
+        expect(result).toBe(3);
+        expect(order).toEqual(['rclone starts', 'rclone stops']);
+    });
+
     test('returns the serve code without starting rclone when the serve ends before it listens', async () => {
         const calls: { args: string[] }[] = [];
         const result = await mountCommand(

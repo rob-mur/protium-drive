@@ -7,7 +7,8 @@ import { afterEach, describe, expect, test } from 'bun:test';
 
 import { authLogin } from './auth/login.ts';
 import { createLogger } from './logger.ts';
-import { serveCommand, NOT_SIGNED_IN, LOOPBACK_WARNING } from './serve.ts';
+import { serveCommand, NOT_SIGNED_IN, LOOPBACK_WARNING, NEEDS_LOGIN, REFUSED_SESSION } from './serve.ts';
+import { SessionFileStore } from './session/store.ts';
 import { CONTROL_LINE, startReceiveArm } from '../fake-drive/receive-arm.ts';
 
 const DIRS: string[] = [];
@@ -29,8 +30,9 @@ afterEach(async () => {
 /** Signs in against the fake drive, as the user approves the sign-in in a browser. Returns the control channel. */
 async function signIn(stateDir: string, driveDir: string): Promise<URL> {
     let controlUrl: URL | undefined;
+    let signedIn!: Promise<void>;
     const urlSeen = new Promise<void>((resolve) => {
-        authLogin({
+        signedIn = authLogin({
             stateDir,
             logger: QUIET,
             fakeDriveDir: driveDir,
@@ -46,6 +48,8 @@ async function signIn(stateDir: string, driveDir: string): Promise<URL> {
     });
     await urlSeen;
     await fetch(new URL('account/approve', controlUrl!), { method: 'POST' });
+    // The sign-in holds the state lock until it has saved the session.
+    await signedIn;
     return controlUrl!;
 }
 
@@ -70,7 +74,11 @@ async function seedDrive(driveDir: string, nodes: { path: string; type: 'folder'
 }
 
 describe('serveCommand', () => {
-    test('refuses to start without a session, naming auth login, and exits 1', async () => {
+    test('the needs-login status is 3', () => {
+        expect(NEEDS_LOGIN).toBe(3);
+    });
+
+    test('refuses to start without a session, naming auth login, and exits with the needs-login status', async () => {
         const stateDir = scratch('empty');
         const driveDir = scratch('drive');
         const errors: string[] = [];
@@ -78,8 +86,24 @@ describe('serveCommand', () => {
 
         const code = await serveCommand({ stateDir, host: '127.0.0.1', port: 0, logger, fakeDriveDir: driveDir });
 
-        expect(code).toBe(1);
+        expect(code).toBe(NEEDS_LOGIN);
         expect(errors).toEqual([NOT_SIGNED_IN]);
+    });
+
+    test('refuses to start on a session Proton refused, saying so, and exits with the needs-login status', async () => {
+        const stateDir = scratch('state');
+        const driveDir = scratch('drive');
+        await signIn(stateDir, driveDir);
+        const store = new SessionFileStore(stateDir);
+        const stored = (await store.load())!;
+        await store.save({ ...stored, refreshRejectedAt: '2026-11-11T10:00:00.000Z' });
+        const errors: string[] = [];
+        const logger = { ...QUIET, error: (line: string) => errors.push(line) };
+
+        const code = await serveCommand({ stateDir, host: '127.0.0.1', port: 0, logger, fakeDriveDir: driveDir });
+
+        expect(code).toBe(NEEDS_LOGIN);
+        expect(errors).toEqual([REFUSED_SESSION('2026-11-11T10:00:00.000Z')]);
     });
 
     test('serves an empty Drive: the root listing is empty', async () => {
@@ -319,16 +343,16 @@ describe('serveCommand', () => {
         expect(String(secondError)).toContain(stateDir);
     });
 
-    test('a refused refresh answers 401 from then on, and no further call reaches the Drive', async () => {
+    test('a refused refresh answers that request 401, then stops the serve with the needs-login status', async () => {
         const stateDir = scratch('state');
         const driveDir = scratch('drive');
         await seedDrive(driveDir, [{ path: '/Photos/beach.jpg', type: 'file', contentBase64: btoa('sand and sea') }]);
         await signIn(stateDir, driveDir);
-        const abort = new AbortController();
         const infos: string[] = [];
-        const logger = { ...QUIET, info: (line: string) => infos.push(line) };
+        const errors: string[] = [];
+        const logger = { ...QUIET, info: (line: string) => infos.push(line), error: (line: string) => errors.push(line) };
         const controlSeen = captureControlUrl();
-        const serving = serveCommand({ stateDir, host: '127.0.0.1', port: 0, logger, fakeDriveDir: driveDir, signal: abort.signal });
+        const serving = serveCommand({ stateDir, host: '127.0.0.1', port: 0, logger, fakeDriveDir: driveDir });
         const url = (await waitFor(infos, 'Serving Proton Drive'))!.match(/https?:\/\/\S+/)![0];
         const control = await controlSeen;
 
@@ -337,7 +361,6 @@ describe('serveCommand', () => {
         // listing with no Drive call at all, and the point here is the Drive call.)
         const healthy = await fetch(url, { method: 'PROPFIND', headers: { Depth: '0' } });
         expect(healthy.status).toBe(207);
-        const callsBefore = await (await fetch(new URL('calls', control))).json();
 
         // Proton refuses the next refresh, and the access token expires, as the scenario does.
         await fetch(new URL('account/refuse-next-refresh', control), { method: 'POST' });
@@ -345,26 +368,19 @@ describe('serveCommand', () => {
 
         const first = await fetch(new URL('Photos', url), { method: 'PROPFIND', headers: { Depth: '1' } });
         const firstBody = await first.text();
-        // The refused listing itself reached the Drive once and was turned away there;
-        // everything after the refusal must reach nothing.
-        const callsAfterRefusal = await (await fetch(new URL('calls', control))).json();
-        const second = await fetch(new URL('Photos/beach.jpg', url), { method: 'PROPFIND', headers: { Depth: '0' } });
-        const secondBody = await second.text();
-        const report = (await (await fetch(new URL('account', control))).json()) as { refreshes: { used: string; outcome: string }[] };
-        const callsAfter = await (await fetch(new URL('calls', control))).json();
-        abort.abort();
-        expect(await serving).toBe(0);
 
+        // The serve stops on its own: no abort.
+        expect(await serving).toBe(NEEDS_LOGIN);
+        expect(errors.filter((line) => line.includes('Proton refused the stored session'))).toHaveLength(1);
         expect(first.status).toBe(401);
         expect(firstBody).toContain('Proton refused the stored session');
-        expect(second.status).toBe(401);
-        expect(secondBody).toContain('Proton refused the stored session');
+        // The listener is gone with the serve.
+        expect(await fetch(url).then(() => 'answered', () => 'refused')).toBe('refused');
         // The account saw exactly one refresh, and it was the refused one.
-        expect(report.refreshes).toEqual([{ used: 'refresh-1', outcome: 'refused' }]);
+        const account = JSON.parse(readFileSync(join(driveDir, 'account.json'), 'utf8')) as { refreshes: { used: string; outcome: string }[] };
+        expect(account.refreshes).toEqual([{ used: 'refresh-1', outcome: 'refused' }]);
         // The session file keeps the refused session, marked.
         expect(readFileSync(join(stateDir, 'session.json'), 'utf8')).toContain('refreshRejectedAt');
-        // No Drive call happened after the refusal.
-        expect(callsAfter).toEqual(callsAfterRefusal);
     });
 
     test('a failed overwrite refuses the DELETE for 60 s on the Drive clock, then frees it', async () => {

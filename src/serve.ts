@@ -14,6 +14,9 @@ import { startServer, type RunningServer } from './webdav/server';
 export const DEFAULT_HOST = '127.0.0.1';
 export const DEFAULT_PORT = 7395;
 
+/** The exit status of a serve that needs `auth login` first: a user service stops on it instead of restarting. */
+export const NEEDS_LOGIN = 3;
+
 export const NOT_SIGNED_IN = 'Not signed in to Proton. Run "proton-drive-mount auth login" first.';
 export const REFUSED_SESSION = (rejectedAt: string) =>
     `Proton refused the stored session at ${rejectedAt}. Run "proton-drive-mount auth login" again.`;
@@ -39,6 +42,9 @@ export type ServeOptions = {
  * Serves Proton Drive over WebDAV until the signal comes. It takes the state
  * lock, loads the session and refuses to start without one: the serve has no
  * authentication of its own, so its only gate is the signed-in session.
+ *
+ * Without a usable session it exits with NEEDS_LOGIN, at the start or when Proton refuses
+ * the session while it runs. Then the request that met the refusal still gets its 401.
  */
 export async function serveCommand(options: ServeOptions): Promise<number> {
     const { stateDir, host, port, logger, signal } = options;
@@ -47,14 +53,16 @@ export async function serveCommand(options: ServeOptions): Promise<number> {
         const connection = await connect({ stateDir, logger, fakeDriveDir: options.fakeDriveDir });
         try {
             await connection.auth.loadSession();
-            if (!connection.auth.isLoggedIn()) {
-                logger.error(NOT_SIGNED_IN);
-                return 1;
+            const problem = authProblem(connection.credentials);
+            if (problem) {
+                logger.error(problem);
+                return NEEDS_LOGIN;
             }
-            if (connection.credentials.rejectedAt) {
-                logger.error(REFUSED_SESSION(connection.credentials.rejectedAt));
-                return 1;
-            }
+            const refused = new Promise<'refused'>((resolve) =>
+                connection.credentials.on('sessionInfoChanged', () => {
+                    if (authProblem(connection.credentials)) resolve('refused');
+                }),
+            );
             if (!isLoopback(host)) {
                 logger.warn(LOOPBACK_WARNING(host));
             }
@@ -80,11 +88,15 @@ export async function serveCommand(options: ServeOptions): Promise<number> {
             await watcher.start();
             logger.info(`Serving Proton Drive ${options.root ? `folder /${options.root}` : 'My files'} at ${server.url.href}`);
             options.onListening?.(server.url);
-            await waitUntil(signal);
+            const ended = await Promise.race([waitUntil(signal).then(() => 'signal' as const), refused]);
+            if (ended === 'refused') {
+                logger.error(authProblem(connection.credentials)!);
+            }
             logger.info('Stopping');
             watcher.stop();
-            await stop(server);
-            return 0;
+            // On a refusal, let the request that met it finish with its 401.
+            await stop(server, ended === 'refused');
+            return ended === 'refused' ? NEEDS_LOGIN : 0;
         } finally {
             await connection.stop();
         }
@@ -94,9 +106,9 @@ export async function serveCommand(options: ServeOptions): Promise<number> {
 }
 
 /** Closes the listener even when stopping is interrupted, so the port frees. */
-async function stop(server: RunningServer): Promise<void> {
+async function stop(server: RunningServer, graceful: boolean): Promise<void> {
     try {
-        await server.stop();
+        await server.stop(graceful);
     } catch {
         // The listener is gone either way; the exit code stays 0.
     }
