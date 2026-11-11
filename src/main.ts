@@ -49,7 +49,10 @@ Options:
   MOUNTPOINT        mount runs the serve and rclone mount, with the tested settings, and mounts
                     the Drive there. SIGINT or SIGTERM stops both and unmounts. mount creates
                     a MOUNTPOINT that does not exist and unmounts one a killed mount left. It
-                    refuses (exit 2) a MOUNTPOINT that is not an empty folder.
+                    refuses (exit 2) a MOUNTPOINT that is not an empty folder. A write waits in
+                    the cache folder until it reaches the Drive. A stop does not wait for it: mount
+                    logs each file not yet on the Drive, and the next mount with the same cache
+                    folder, --state-dir and --root uploads it, on any port, also after a crash.
   --dir-cache-time DURATION
                     How long the mount trusts a folder listing before it asks again, so how soon
                     a change from another device shows. Default: ${DEFAULT_CACHE.dirCacheTime}. Give a long time,
@@ -57,7 +60,10 @@ Options:
   --vfs-cache-max-size SIZE
                     The most file content the mount keeps on disk, such as 512M or 6G, or off for
                     no limit. Default: ${DEFAULT_CACHE.vfsCacheMaxSize}. rclone drops a cached file it has not used for 1h.
-  --cache-dir DIR   Where the mount keeps its cache. Default: rclone's own (~/.cache/rclone).
+  --cache-dir DIR   Where the mount keeps its cache. Default: rclone's own, $RCLONE_CACHE_DIR,
+                    else $XDG_CACHE_HOME/rclone (~/.cache/rclone). A mount takes over the files an
+                    earlier mount with the same --state-dir and --root left in its cache folder, and
+                    clears the rest of that mount's cache.
   --root PATH       Folder inside "My files" to serve as /. Default: all of My files.
   FOLDER            migrate-node-keys walks this folder of My files. For each file whose node key is
                     OpenPGP v6 or locked with Argon2 (as rclone 1.75.0 wrote them), it uploads a copy
@@ -250,7 +256,7 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
         if (positionals.length !== 2 || !mountpoint) {
             return { code: 2, stdout: '', stderr: usage };
         }
-        const cache = cacheSettings(values);
+        const cache = cacheSettings(values, env);
         if (typeof cache === 'string') {
             return { code: 2, stdout: '', stderr: `${cache}\n${usage}` };
         }
