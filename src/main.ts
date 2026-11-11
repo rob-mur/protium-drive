@@ -16,7 +16,7 @@ import { acquireStateLock } from './session/lock.ts';
 import { SessionFileStore } from './session/store.ts';
 import { THIRD_PARTY_NOTICE } from './notice.ts';
 import { migrateNodeKeysCommand } from './migrate.ts';
-import { mountCommand, mountDeps } from './mount.ts';
+import { cacheSettings, DEFAULT_CACHE, mountCommand, mountDeps } from './mount.ts';
 import { serveCommand, DEFAULT_HOST, DEFAULT_PORT } from './serve.ts';
 import { APP_VERSION, VERSION, buildRevision } from './version.ts';
 
@@ -30,7 +30,8 @@ Usage:
   proton-drive-mount auth status [--state-dir DIR]
   proton-drive-mount auth logout [--state-dir DIR]
   proton-drive-mount serve [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--root PATH] [--state-dir DIR] [--fake-drive DIR]
-  proton-drive-mount mount MOUNTPOINT [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--root PATH] [--state-dir DIR] [--fake-drive DIR]
+  proton-drive-mount mount MOUNTPOINT [--dir-cache-time DURATION] [--vfs-cache-max-size SIZE] [--cache-dir DIR]
+                     [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--root PATH] [--state-dir DIR] [--fake-drive DIR]
   proton-drive-mount migrate-node-keys FOLDER [--dry-run] [--state-dir DIR] [--fake-drive DIR]
   proton-drive-mount --version
   proton-drive-mount help
@@ -48,6 +49,14 @@ Options:
                     the Drive there. SIGINT or SIGTERM stops both and unmounts. mount creates
                     a MOUNTPOINT that does not exist and unmounts one a killed mount left. It
                     refuses (exit 2) a MOUNTPOINT that is not an empty folder.
+  --dir-cache-time DURATION
+                    How long the mount trusts a folder listing before it asks again, so how soon
+                    a change from another device shows. Default: ${DEFAULT_CACHE.dirCacheTime}. Give a long time,
+                    such as 1000h, for a mount that only this computer changes.
+  --vfs-cache-max-size SIZE
+                    The most file content the mount keeps on disk, such as 512M or 6G, or off for
+                    no limit. Default: ${DEFAULT_CACHE.vfsCacheMaxSize}. rclone drops a cached file it has not used for 1h.
+  --cache-dir DIR   Where the mount keeps its cache. Default: rclone's own (~/.cache/rclone).
   --root PATH       Folder inside "My files" to serve as /. Default: all of My files.
   FOLDER            migrate-node-keys walks this folder of My files. For each file whose node key is
                     OpenPGP v6 or locked with Argon2 (as rclone 1.75.0 wrote them), it uploads a copy
@@ -167,6 +176,9 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
             host: { type: 'string' },
             port: { type: 'string' },
             root: { type: 'string' },
+            'dir-cache-time': { type: 'string' },
+            'vfs-cache-max-size': { type: 'string' },
+            'cache-dir': { type: 'string' },
             'dry-run': { type: 'boolean' },
             help: { type: 'boolean', short: 'h' },
             version: { type: 'boolean' },
@@ -230,9 +242,14 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
         return { code, stdout: '', stderr: '' };
     }
     if (positionals[0] === 'mount') {
+        const usage = 'Usage: proton-drive-mount mount MOUNTPOINT [cache options] [serve options]\n';
         const mountpoint = positionals[1];
         if (positionals.length !== 2 || !mountpoint) {
-            return { code: 2, stdout: '', stderr: `Usage: proton-drive-mount mount MOUNTPOINT [serve options]\n` };
+            return { code: 2, stdout: '', stderr: usage };
+        }
+        const cache = cacheSettings(values);
+        if (typeof cache === 'string') {
+            return { code: 2, stdout: '', stderr: `${cache}\n${usage}` };
         }
         const port = Number(values.port ?? DEFAULT_PORT);
         if (!Number.isInteger(port) || port < 0 || port > 65535) {
@@ -241,6 +258,7 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
         const code = await mountCommand(
             {
                 mountpoint,
+                cache,
                 stateDir: resolveStateDir(values['state-dir'], env),
                 host: values.host ?? DEFAULT_HOST,
                 port,

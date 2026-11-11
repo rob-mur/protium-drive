@@ -140,6 +140,33 @@ describe('serve dispatch', () => {
     });
 });
 
+describe('mount dispatch', () => {
+    test('HELP names the cache flags and their defaults', () => {
+        for (const text of ['--dir-cache-time DURATION', '--vfs-cache-max-size SIZE', '--cache-dir DIR', 'Default: 30s', 'Default: 6G']) {
+            expect(HELP).toContain(text);
+        }
+    });
+
+    test('a bad cache setting exits 2, naming the flag, before the serve starts', async () => {
+        const driveDir = mkdtempSync(join(tmpdir(), 'pdm-mount-dispatch-'));
+        try {
+            for (const [flag, value] of [
+                ['--dir-cache-time', 'banana'],
+                ['--vfs-cache-max-size', 'big'],
+                ['--cache-dir', ''],
+            ]) {
+                // No session and a fake drive that holds nothing: a serve that started would fail on its own.
+                const answer = await runCommand(['mount', '/nonexistent-mountpoint', flag!, value!, '--fake-drive', driveDir, '--state-dir', join(driveDir, 'state')], {});
+                expect(answer.code).toBe(2);
+                expect(answer.stderr).toContain(flag!);
+                expect(answer.stderr).toContain('Usage: proton-drive-mount mount MOUNTPOINT');
+            }
+        } finally {
+            await rmAsync(driveDir, { recursive: true, force: true });
+        }
+    });
+});
+
 describe('migrate-node-keys dispatch', () => {
     test('HELP names the command, its folder and --dry-run', () => {
         expect(HELP).toContain('migrate-node-keys FOLDER [--dry-run]');

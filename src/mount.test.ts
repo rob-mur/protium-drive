@@ -1,14 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 
 import { createLogger } from './logger.ts';
-import { mountCommand, rcloneArgs, RCLONE_SETTINGS, type RcloneProcess } from './mount.ts';
+import { cacheSettings, DEFAULT_CACHE, mountCommand, rcloneArgs, RCLONE_SETTINGS, type RcloneProcess } from './mount.ts';
 import type { ServeOptions } from './serve.ts';
 
 const QUIET = createLogger({ PDM_LOG_LEVEL: 'error' });
 
 describe('rcloneArgs', () => {
     test('mounts the serve as a :webdav: remote of vendor other, with the tested settings', () => {
-        const args = rcloneArgs('/mnt/drive', new URL('http://127.0.0.1:7395/'));
+        const args = rcloneArgs('/mnt/drive', new URL('http://127.0.0.1:7395/'), DEFAULT_CACHE);
         expect(args.slice(0, 3)).toEqual(['mount', ':webdav:', '/mnt/drive']);
         expect(args).toContain('--webdav-url=http://127.0.0.1:7395/');
         expect(args).toContain('--webdav-vendor=other');
@@ -19,20 +19,68 @@ describe('rcloneArgs', () => {
         }
     });
 
-    test('carries every setting #25 names', () => {
-        const args = rcloneArgs('/m', new URL('http://127.0.0.1:1/')).join(' ');
+    test('without cache settings, carries the documented defaults for a multi-device mount', () => {
+        const args = rcloneArgs('/m', new URL('http://127.0.0.1:1/'), DEFAULT_CACHE).join(' ');
         for (const setting of [
             '--vfs-cache-mode full',
             '--vfs-cache-max-size 6G',
             '--vfs-write-back 5s',
-            '--dir-cache-time 1000h',
-            '--attr-timeout 1000h',
+            '--dir-cache-time 30s',
+            '--attr-timeout 1s',
             '--no-modtime',
             '--no-checksum',
             '--timeout 1h',
             '--transfers 2',
         ]) {
             expect(args).toContain(setting);
+        }
+        expect(args).not.toContain('--cache-dir');
+    });
+
+    test('passes the cache settings the user gave', () => {
+        const args = rcloneArgs('/m', new URL('http://127.0.0.1:1/'), {
+            dirCacheTime: '5s',
+            vfsCacheMaxSize: '1G',
+            cacheDir: '/var/cache/pdm',
+        }).join(' ');
+        expect(args).toContain('--dir-cache-time 5s');
+        expect(args).toContain('--vfs-cache-max-size 1G');
+        expect(args).toContain('--cache-dir /var/cache/pdm');
+        expect(args).not.toContain('--dir-cache-time 30s');
+        expect(args).not.toContain('--vfs-cache-max-size 6G');
+    });
+});
+
+describe('cacheSettings', () => {
+    test('fills the defaults for what the user left out', () => {
+        expect(cacheSettings({})).toEqual(DEFAULT_CACHE);
+        expect(cacheSettings({ 'vfs-cache-max-size': '1G' })).toEqual({ ...DEFAULT_CACHE, vfsCacheMaxSize: '1G' });
+    });
+
+    test('takes the durations, sizes and directories rclone takes', () => {
+        for (const time of ['5s', '30s', '1h30m', '500ms', '1.5h', '2d', '0s']) {
+            expect(cacheSettings({ 'dir-cache-time': time })).toEqual({ ...DEFAULT_CACHE, dirCacheTime: time });
+        }
+        for (const size of ['1G', '512M', '100k', '1.5G', 'off', '1024']) {
+            expect(cacheSettings({ 'vfs-cache-max-size': size })).toEqual({ ...DEFAULT_CACHE, vfsCacheMaxSize: size });
+        }
+        expect(cacheSettings({ 'cache-dir': '/data/cache' })).toEqual({ ...DEFAULT_CACHE, cacheDir: '/data/cache' });
+    });
+
+    test('refuses a value rclone would not read, naming the flag', () => {
+        for (const [flag, value] of [
+            ['dir-cache-time', 'banana'],
+            ['dir-cache-time', ''],
+            ['dir-cache-time', '5'],
+            ['dir-cache-time', '-5s'],
+            ['vfs-cache-max-size', 'big'],
+            ['vfs-cache-max-size', ''],
+            ['vfs-cache-max-size', '1X'],
+            ['cache-dir', ''],
+        ] as const) {
+            const settings = cacheSettings({ [flag]: value });
+            expect(typeof settings).toBe('string');
+            expect(settings).toContain(`--${flag}`);
         }
     });
 });

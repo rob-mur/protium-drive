@@ -10,23 +10,68 @@ import { serveCommand, type ServeOptions } from './serve.ts';
 const STOP_GRACE_MS = 30_000;
 
 /**
- * The rclone settings the prototype ran with and the suite tests, as [flag, value] pairs.
- * A flag with no value is a switch.
+ * The rclone settings the suite tests that a user cannot change, as [flag, value] pairs. A flag
+ * with no value is a switch. The short attribute timeout lets another device's changes show; the
+ * directory cache time, the cache size and the cache folder are in {@link CacheSettings}.
  */
 export const RCLONE_SETTINGS: readonly (readonly [string, string?])[] = [
     ['--vfs-cache-mode', 'full'],
-    ['--vfs-cache-max-size', '6G'],
     ['--vfs-write-back', '5s'],
-    ['--dir-cache-time', '1000h'],
-    ['--attr-timeout', '1000h'],
+    ['--attr-timeout', '1s'],
     ['--no-modtime'],
     ['--no-checksum'],
     ['--timeout', '1h'],
     ['--transfers', '2'],
 ];
 
+/** The cache settings a user can give `mount`. Each one passes to rclone's flag of the same name. */
+export interface CacheSettings {
+    /** How long rclone trusts a folder listing before it asks the serve again. */
+    dirCacheTime: string;
+    /** The most file content rclone keeps on disk, or `off` for no limit. */
+    vfsCacheMaxSize: string;
+    /** Where rclone keeps the cache. Default: rclone's own (~/.cache/rclone). */
+    cacheDir?: string;
+}
+
+/** Defaults for a mount that more than one device changes: another device's changes show within 30 s. */
+export const DEFAULT_CACHE: CacheSettings = { dirCacheTime: '30s', vfsCacheMaxSize: '6G' };
+
+/** A duration as rclone reads one: 500ms, 30s, 1h30m, 1.5h, 2d. */
+const DURATION = /^(\d+(\.\d+)?(ms|s|m|h|d|w|M|y))+$/;
+/** A size as rclone reads one: bytes, or a number with a K/M/G/T/P suffix, or `off`. */
+const SIZE = /^(off|\d+(\.\d+)?([bBkKmMgGtTpP]i?[bB]?)?)$/;
+
+/** The cache flags as `mount` takes them, before checks. */
+export interface CacheFlags {
+    'dir-cache-time'?: string;
+    'vfs-cache-max-size'?: string;
+    'cache-dir'?: string;
+}
+
+/**
+ * The cache settings from the flags the user gave, with the defaults for the rest, or a message
+ * that names the first flag whose value rclone would refuse. It checks before the serve starts,
+ * so a bad value never leaves a serve running without a mount.
+ */
+export function cacheSettings(flags: CacheFlags): CacheSettings | string {
+    const dirCacheTime = flags['dir-cache-time'] ?? DEFAULT_CACHE.dirCacheTime;
+    if (!DURATION.test(dirCacheTime)) {
+        return `Bad --dir-cache-time ${JSON.stringify(dirCacheTime)}: give a duration such as 30s, 5m or 1h30m.`;
+    }
+    const vfsCacheMaxSize = flags['vfs-cache-max-size'] ?? DEFAULT_CACHE.vfsCacheMaxSize;
+    if (!SIZE.test(vfsCacheMaxSize)) {
+        return `Bad --vfs-cache-max-size ${JSON.stringify(vfsCacheMaxSize)}: give a size such as 512M or 6G, or off.`;
+    }
+    const cacheDir = flags['cache-dir'];
+    if (cacheDir === '') {
+        return 'Bad --cache-dir "": give a folder.';
+    }
+    return cacheDir === undefined ? { dirCacheTime, vfsCacheMaxSize } : { dirCacheTime, vfsCacheMaxSize, cacheDir };
+}
+
 /** The arguments that mount the serve at `url` onto `mountpoint` as a `:webdav:` remote. */
-export function rcloneArgs(mountpoint: string, url: URL): string[] {
+export function rcloneArgs(mountpoint: string, url: URL, cache: CacheSettings): string[] {
     return [
         'mount',
         ':webdav:',
@@ -34,6 +79,11 @@ export function rcloneArgs(mountpoint: string, url: URL): string[] {
         `--webdav-url=${url.href}`,
         '--webdav-vendor=other',
         ...RCLONE_SETTINGS.flat().filter((part): part is string => part !== undefined),
+        '--dir-cache-time',
+        cache.dirCacheTime,
+        '--vfs-cache-max-size',
+        cache.vfsCacheMaxSize,
+        ...(cache.cacheDir === undefined ? [] : ['--cache-dir', cache.cacheDir]),
     ];
 }
 
@@ -59,7 +109,7 @@ export function spawnRclone(executable: string, args: string[], env: Record<stri
     };
 }
 
-export type MountOptions = Omit<ServeOptions, 'onListening' | 'credential'> & { mountpoint: string };
+export type MountOptions = Omit<ServeOptions, 'onListening' | 'credential'> & { mountpoint: string; cache?: CacheSettings };
 
 export interface MountDeps {
     serve: (options: ServeOptions) => Promise<number>;
@@ -89,7 +139,8 @@ export function mountDeps(env: NodeJS.ProcessEnv = process.env): MountDeps {
  * every user can.
  */
 export async function mountCommand(options: MountOptions, deps: MountDeps = mountDeps()): Promise<number> {
-    const { mountpoint, signal, logger } = options;
+    const { mountpoint, cache = DEFAULT_CACHE, ...serveOptions } = options;
+    const { signal, logger } = serveOptions;
     const refusal = await deps.prepareMountpoint(mountpoint);
     if (refusal) {
         logger.error(refusal.message);
@@ -99,12 +150,12 @@ export async function mountCommand(options: MountOptions, deps: MountDeps = moun
     let listening!: (url: URL) => void;
     const listens = new Promise<URL>((resolve) => (listening = resolve));
     const credential = randomBytes(32).toString('base64url');
-    const served = deps.serve({ ...options, credential, signal: serveStop.signal, onListening: listening });
+    const served = deps.serve({ ...serveOptions, credential, signal: serveStop.signal, onListening: listening });
     const first = await Promise.race([listens, served]);
     if (typeof first === 'number') {
         return first;
     }
-    const rclone = deps.startRclone(deps.rclone, rcloneArgs(mountpoint, first), { RCLONE_WEBDAV_BEARER_TOKEN: credential });
+    const rclone = deps.startRclone(deps.rclone, rcloneArgs(mountpoint, first, cache), { RCLONE_WEBDAV_BEARER_TOKEN: credential });
     logger.info(`Mounting ${first.href} at ${mountpoint}`);
     const aborted = new Promise<'signal'>((resolve) => {
         if (signal?.aborted) resolve('signal');
