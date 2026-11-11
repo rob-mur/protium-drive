@@ -164,3 +164,11 @@ Then(
     );
   },
 );
+
+Then(/^the mount's log names "([^"]*)" as not yet on the Drive$/, function (this: DriveWorld, path: string) {
+  const mount = this.mount;
+  claim(mount, () => `the mount was never started.\n${this.whatHappened()}`);
+  claim(mount.process.ending, () => `the mount did not end.\n${this.whatHappened()}`);
+  const pending = mount.process.output.split("\n").filter((line) => line.includes(path) && line.includes("not yet on the Drive"));
+  claim(pending.length > 0, () => `the mount's log has no line naming "${path}" as not yet on the Drive.\n${this.whatHappened()}`);
+});

@@ -195,6 +195,30 @@
       "failing_step": [
         "^the mount printed one line that says it is mounted at the folder, and the folder was mounted when it did$"
       ]
+    },
+    {
+      "id": "a-write-a-killed-mount-left-reaches-the-drive-after-the-next-start",
+      "path": "spec/features/mount.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^within (\\d+) seconds the Drive holds \"([^\"]*)\" containing \"([^\"]*)\"$"
+      ]
+    },
+    {
+      "id": "a-write-a-killed-mount-left-reaches-the-drive-after-a-start-on-another-port",
+      "path": "spec/features/mount.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^within (\\d+) seconds the Drive holds \"([^\"]*)\" containing \"([^\"]*)\"$"
+      ]
+    },
+    {
+      "id": "a-mount-stopped-with-a-write-pending-names-the-file",
+      "path": "spec/features/mount.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the mount's log names \"([^\"]*)\" as not yet on the Drive$"
+      ]
     }
   ]
 }

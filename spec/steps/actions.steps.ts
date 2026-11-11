@@ -91,3 +91,15 @@ When(/^the user lists the mounted folder "([^"]*)"$/, async function (this: Driv
 When(/^the user starts the mount$/, async function (this: DriveWorld) {
   await this.ensureMounted();
 });
+
+When(/^the mount and every process it started are killed before the write reaches the Drive$/, async function (this: DriveWorld) {
+  await this.killMountAndItsProcesses();
+});
+
+When(/^the mount is stopped before the write reaches the Drive$/, async function (this: DriveWorld) {
+  await this.stopMount();
+});
+
+When(/^the user starts the mount again on (the same|another) port$/, async function (this: DriveWorld, port: string) {
+  await this.mountAgain(port === "the same" ? "same" : "another");
+});

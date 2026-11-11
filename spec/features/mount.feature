@@ -37,3 +37,29 @@ Feature: Mounting the Drive as a folder
     And the folder the user mounts the Drive at holds the file "notes.txt"
     When the user mounts the Drive at that folder
     Then the mount is refused with exit status 2 and a message that names the folder, and the folder still holds exactly "notes.txt"
+
+  @id:a-write-a-killed-mount-left-reaches-the-drive-after-the-next-start
+  Scenario: A write that a killed mount left behind reaches the Drive after the next start
+    Given a Drive whose My files holds the folder "Photos"
+    And the user mounts the Drive at a folder
+    When the user writes "sand and snow" to the mounted file "Photos/new.jpg"
+    And the mount and every process it started are killed before the write reaches the Drive
+    And the user starts the mount again on the same port
+    Then within 60 seconds the Drive holds "Photos/new.jpg" containing "sand and snow"
+
+  @id:a-write-a-killed-mount-left-reaches-the-drive-after-a-start-on-another-port
+  Scenario: A write that a killed mount left behind reaches the Drive after a start on another port
+    Given a Drive whose My files holds the folder "Photos"
+    And the user mounts the Drive at a folder
+    When the user writes "sand and snow" to the mounted file "Photos/new.jpg"
+    And the mount and every process it started are killed before the write reaches the Drive
+    And the user starts the mount again on another port
+    Then within 60 seconds the Drive holds "Photos/new.jpg" containing "sand and snow"
+
+  @id:a-mount-stopped-with-a-write-pending-names-the-file
+  Scenario: A mount stopped before a write reaches the Drive names the file in its log
+    Given a Drive whose My files holds the folder "Photos"
+    And the user mounts the Drive at a folder
+    When the user writes "sand and snow" to the mounted file "Photos/new.jpg"
+    And the mount is stopped before the write reaches the Drive
+    Then the mount's log names "Photos/new.jpg" as not yet on the Drive

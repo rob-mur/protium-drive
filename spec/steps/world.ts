@@ -149,6 +149,8 @@ export class DriveWorld extends World {
   mountedListings: { path: string; outcome: MountOutcome }[] = [];
   /** What the mount said while it started, from its start until it said it was ready. */
   readonly readiness: Readiness = { notifications: [] };
+  /** The mounts that ended before the one in `mount` started, oldest first. */
+  endedMounts: (Serving & { mountpoint: string })[] = [];
   /** The `migrate-node-keys` run a When made. */
   migration?: { path: string; answer: Answer };
   /** What went wrong while acting, for the Then's failure message. */
@@ -549,13 +551,13 @@ export class DriveWorld extends World {
 
   // --- the mount ------------------------------------------------------------------
 
-  async ensureMounted(): Promise<Serving & { mountpoint: string }> {
+  async ensureMounted(port?: number): Promise<Serving & { mountpoint: string }> {
     await this.arrange();
     if (!this.mounted) this.trouble("no Given said the user mounts the Drive, yet a step used the mount point");
     if (this.mount?.process.running) return this.mount;
     const mountpoint = await this.prepareMountFolder();
     const dead = this.deadMounts ?? [];
-    const port = await freePort();
+    port ??= await freePort();
     if (this.mountsAsService) this.notifySocket ??= NotifySocket.open();
     const env = this.notifySocket ? { NOTIFY_SOCKET: this.notifySocket.path } : undefined;
     const running = this.start([
@@ -570,6 +572,7 @@ export class DriveWorld extends World {
       ...(this.dirCacheTime === undefined ? [] : [DIR_CACHE_TIME_FLAG, this.dirCacheTime]),
     ], env);
     const mount: Serving & { mountpoint: string } = { process: running, url: `http://127.0.0.1:${port}/`, mountpoint };
+    if (this.mount) this.endedMounts.push(this.mount);
     this.mount = mount;
     const mounted = () => mountIds(mountpoint).some((id) => !dead.includes(id));
     if (!(await running.waitFor(() => this.watchReadiness(mount, mounted()), MOUNT_MS))) {
@@ -608,6 +611,54 @@ export class DriveWorld extends World {
       MOUNT_MS,
     );
     if (!ready) this.trouble(`the mount did not say it was ready within ${MOUNT_MS / 1000} s: ${mount.process.describe()}`);
+  }
+
+  /**
+   * Kills the mount and every process it started with SIGKILL, as a service manager kills a
+   * service's processes, so nothing unmounts and nothing flushes.
+   */
+  async killMountAndItsProcesses(): Promise<void> {
+    const mount = this.mount;
+    const pid = mount?.process.pid;
+    if (!mount || pid === undefined) {
+      this.trouble("there was no running mount to kill");
+      return;
+    }
+    for (const { pid: each } of processTree(pid).reverse()) {
+      try {
+        process.kill(each, "SIGKILL");
+      } catch {
+        // It ended on its own already.
+      }
+    }
+    await mount.process.ended;
+    // The killed mount stays in the mount table. Clearing it here keeps the next start's wait
+    // simple: Linux reuses mount ids, so a new mount can carry the dead one's id.
+    const cleared = await unmount(mount.mountpoint);
+    if (cleared.exitCode !== 0) this.trouble(`the killed mount could not be cleared (${cleared.command}): ${cleared.stderr}`);
+  }
+
+  /** Starts the mount again after it ended: on the port the last one had, or on another free one. */
+  async mountAgain(port: "same" | "another"): Promise<void> {
+    const last = this.mount;
+    if (!last || last.process.running) {
+      this.trouble("there was no ended mount to start again");
+      return;
+    }
+    const lastPort = Number(new URL(last.url).port);
+    let next = lastPort;
+    if (port === "another") while (next === lastPort) next = await freePort();
+    await this.ensureMounted(next);
+  }
+
+  /** Stops the mount as a service manager stops it (SIGTERM), and waits for it to end. */
+  async stopMount(): Promise<void> {
+    const mount = this.mount;
+    if (!mount) {
+      this.trouble("there was no mount to stop");
+      return;
+    }
+    await mount.process.stop();
   }
 
   /** Makes the folder the user mounts the Drive at as the Givens arranged it, once, and gives its path. */
@@ -715,6 +766,7 @@ export class DriveWorld extends World {
     if (this.startedSignIn) lines.push(`  starting to sign in: ${this.startedSignIn.describe()}`);
     if (this.serve) lines.push(`  the serve: ${this.serve.process.describe()}`);
     if (this.secondServe) lines.push(`  the second serve: ${this.secondServe.describe()}`);
+    for (const ended of this.endedMounts) lines.push(`  an earlier mount: ${ended.process.describe()}`);
     if (this.mount) lines.push(`  the mount (pid ${this.mount.process.pid}): ${this.mount.process.describe()}`);
     for (const n of this.readiness.notifications) lines.push(`  pid ${n.pid} told systemd ${JSON.stringify(n.text)}, the folder ${n.mounted ? "mounted" : "not mounted"}`);
     if (this.mountRun) lines.push(indent(`mounting: exited ${this.mountRun.answer.exitCode}\n${this.mountRun.answer.stdout}${this.mountRun.answer.stderr}`.trimEnd()));
