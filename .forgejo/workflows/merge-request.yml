@@ -117,7 +117,7 @@ jobs:
       PR_AUTHOR: ${{ github.event.pull_request.user.login }}
       GATE_REVIEWER: cd-pipeline
       FJ_TOKEN: ${{ secrets.CD_PIPELINE_TOKEN }}
-      # This repository is private: tasks/time-budgets.sh reads its runs with the job's own token.
+      # This repository is private: cd-time-budget-stop reads its runs with the job's own token.
       READING_TOKEN: ${{ github.token }}
     steps:
       - name: Refuse when an earlier verb did not pass
@@ -132,4 +132,4 @@ jobs:
       - uses: actions/checkout@v4
       - name: Post one acknowledgement when a stage timing breaches its budget
         if: needs.acceptance.result == 'success'
-        run: exec tasks/time-budget-stop.sh
+        run: cd-time-budget-stop

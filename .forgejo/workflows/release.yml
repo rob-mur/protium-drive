@@ -29,8 +29,6 @@ jobs:
         uses: ./.forgejo/actions/pipeline-credential
       - name: "refuse any revision that is not the tip of releasable"
         run: cd-release
-      - name: "install the release plugin from cd-pipeline/release/package-lock.json"
-        run: npm ci --prefix cd-pipeline/release
       - name: "cut the version and post the release object with its record"
         env:
           GITEA_URL: ${{ github.server_url }}
@@ -51,11 +49,11 @@ jobs:
             sed -n 's/^Authorization: Bearer //p')
           test -n "$GITEA_TOKEN"
           export GITEA_TOKEN
-          GITHUB_REF=refs/heads/releasable semantic-release --no-ci --branches releasable \
-            --extends ./cd-pipeline/release/release.config.mjs
+          export CD_RELEASE_RECORD=$PWD/$CD_RELEASE_RECORD CD_RELEASE_BRANCH=$PWD/$CD_RELEASE_BRANCH
+          cd-semantic-release
           branch=$(cat "$CD_RELEASE_BRANCH" 2>/dev/null || true)
           if [ "$branch" != releasable ]; then
-            echo "release.yml: semantic-release stopped before verifyConditions, so it did not take this run as the tip of 'releasable' and published nothing; its log above says whether it read another branch or found releasable behind the remote"
+            echo "release.yml: cd-semantic-release stopped before verifyConditions, so it did not take this run as the tip of 'releasable' and published nothing; its log above says whether it read another branch or found releasable behind the remote"
             exit 1
           fi
       - name: "refuse a release object that lost its record"

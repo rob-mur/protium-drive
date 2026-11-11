@@ -18,9 +18,8 @@
   cd-pipeline = {
     typescript.enable = true;
 
-    servingCheck = ''
-      exec tasks/consumer-instance.sh "$CD_SERVING_REV" "$CD_SERVING_BRANCH"
-    '';
+    # A consumer builds the flake's own package at the deployed rev and runs it.
+    consumerKind = "flake-package";
 
     records.prefix = "europe-west1-docker.pkg.dev/ai-ci-pipeline/proton-drive-mount";
 
@@ -35,10 +34,6 @@
     };
 
     verbs = {
-      commit.tasks.expected-status.exec = ''
-        exec cd-expected-status-gate
-      '';
-
       commit.tasks.workflows.exec = ''
         exec actionlint -config-file tasks/actionlint.yaml -- .forgejo/workflows/*.yml
       '';
@@ -67,7 +62,7 @@
       artifact = null;
 
       deploy.tasks.source-member.exec = ''
-        exec tasks/deploy-source-member.sh
+        exec cd-deploy-source-member
       '';
 
       deploy.teardown.exec = ''
@@ -76,7 +71,7 @@
 
       # The stub passes and judges nothing, as cd-pipeline's own stub for an unbuilt verb does.
       non-functional-requirements.tasks.spec-reach.exec = ''
-        echo "ci:non-functional-requirements:spec-reach: not implemented. cd-pipeline v1.7.0 generates ci:acceptance:spec-reach only in a substitute invocation, and the adopter has to supply the instrumented substitute and the run that drives it, so this run measures no spec reach. The task waits on continuous-delivery owning the substitute run."
+        echo "ci:non-functional-requirements:spec-reach: not implemented. cd-pipeline v1.11.0 measures spec reach through cd-pipeline.coverage.run, a substitute run script the adopter writes: it builds the member instrumented, runs the acceptance suite against it, writes LCOV and prints one verdict line per scenario. cd-pipeline ships no such script for a Bun source member whose frozen suite runs through cd-frozen-suite, so this run measures no spec reach. The task waits on continuous-delivery owning that run."
       '';
     };
   };

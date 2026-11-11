@@ -1,8 +1,0 @@
-{
-  "name": "proton-drive-mount-release",
-  "version": "0.0.0",
-  "private": true,
-  "dependencies": {
-    "@saithodev/semantic-release-gitea": "2.1.0"
-  }
-}
