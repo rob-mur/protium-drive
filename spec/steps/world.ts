@@ -34,6 +34,9 @@ const MOUNT_MS = 60_000;
 /** How long a Then waits for the Drive to show a write the serve has answered. */
 const SETTLE_MS = 10_000;
 
+/** The mount's option that sets rclone's dir cache time. */
+export const DIR_CACHE_TIME_FLAG = "--dir-cache-time";
+
 /** The scenario's own directories, under one temporary directory. */
 interface Scratch {
   root: string;
@@ -99,6 +102,8 @@ export class DriveWorld extends World {
   mounted = false;
   /** The folder the user mounts the Drive at, before the mount: an empty folder unless a Given says otherwise. */
   mountFolder: { kind: "empty" } | { kind: "missing" } | { kind: "left mounted" } | { kind: "holds"; file: string } = { kind: "empty" };
+  /** The mount's dir cache time, as the user writes it; unset, the mount's default. */
+  dirCacheTime?: string;
 
   // --- what the Whens record --------------------------------------------------
   /** The UID of each node the arranged Drive held, by path. */
@@ -130,6 +135,7 @@ export class DriveWorld extends World {
   readonly localRequests: LocalRequestRecord[] = [];
   /** The mount's processes, as another program read them from the process table. */
   mountProcesses?: ProcessView[];
+  mountedListings: { path: string; outcome: MountOutcome }[] = [];
   /** The `migrate-node-keys` run a When made. */
   migration?: { path: string; answer: Answer };
   /** What went wrong while acting, for the Then's failure message. */
@@ -306,6 +312,11 @@ export class DriveWorld extends World {
     ];
   }
 
+  /** The process that serves the arranged Drive: the mount when a Given said the user mounts it, else the serve. */
+  private serving(): Promise<Serving> {
+    return this.mounted ? this.ensureMounted() : this.ensureServing();
+  }
+
   /** The serve, started (or started again after it stopped) on the arranged Drive. */
   async ensureServing(): Promise<Serving> {
     await this.arrange();
@@ -454,7 +465,7 @@ export class DriveWorld extends World {
   }
 
   async anotherClientAdds(path: string, text: string): Promise<void> {
-    const control = (await this.ensureServing()).control;
+    const control = (await this.serving()).control;
     if (control) await this.attempt(`adding ${path} as another client`, () => control.addFile(path, text));
     else this.trouble(`no control channel to add ${path}`);
   }
@@ -467,7 +478,7 @@ export class DriveWorld extends World {
 
   /** Polls the event scheduler the serve asked the Drive for, `times` times. */
   async readEvents(times = 1): Promise<void> {
-    const serving = await this.ensureServing();
+    const serving = await this.serving();
     const control = serving.control;
     for (let i = 0; i < times; i++) {
       const callsBefore = await this.calls(serving);
@@ -515,7 +526,17 @@ export class DriveWorld extends World {
     const mountpoint = await this.prepareMountFolder();
     const dead = this.deadMounts ?? [];
     const port = await freePort();
-    const running = this.start(["mount", mountpoint, "--port", String(port), "--state-dir", this.dirs.state, "--fake-drive", this.dirs.drive]);
+    const running = this.start([
+      "mount",
+      mountpoint,
+      "--port",
+      String(port),
+      "--state-dir",
+      this.dirs.state,
+      "--fake-drive",
+      this.dirs.drive,
+      ...(this.dirCacheTime === undefined ? [] : [DIR_CACHE_TIME_FLAG, this.dirCacheTime]),
+    ]);
     const mount: Serving & { mountpoint: string } = { process: running, url: `http://127.0.0.1:${port}/`, mountpoint };
     this.mount = mount;
     if (!(await running.waitFor(() => mountIds(mountpoint).some((id) => !dead.includes(id)), MOUNT_MS))) {
@@ -563,6 +584,11 @@ export class DriveWorld extends World {
     const file = await readMounted(join(mountpoint, path));
     const folder = await listMounted(join(mountpoint, parentOf(path)));
     this.mountedRead = { file, folder };
+  }
+
+  async listMountedFolder(path: string): Promise<void> {
+    const { mountpoint } = await this.ensureMounted();
+    this.mountedListings.push({ path, outcome: await listMounted(join(mountpoint, path)) });
   }
 
   async writeMountedFile(path: string, text: string): Promise<void> {
@@ -628,6 +654,7 @@ export class DriveWorld extends World {
     if (this.secondServe) lines.push(`  the second serve: ${this.secondServe.describe()}`);
     if (this.mount) lines.push(`  the mount: ${this.mount.process.describe()}`);
     if (this.mountRun) lines.push(indent(`mounting: exited ${this.mountRun.answer.exitCode}\n${this.mountRun.answer.stdout}${this.mountRun.answer.stderr}`.trimEnd()));
+    for (const { path, outcome } of this.mountedListings) lines.push(indent(`listing the mounted folder ${path} (${outcome.command}): exited ${outcome.exitCode}\n${new TextDecoder().decode(outcome.stdout)}${outcome.stderr}`.trimEnd()));
     if (this.migration) lines.push(indent(`migrating the node keys under ${this.migration.path}: exited ${this.migration.answer.exitCode}\n${this.migration.answer.stdout}${this.migration.answer.stderr}`.trimEnd()));
     for (const action of this.actions) lines.push(indent(`${action.kind} ${action.path}: ${describeOutcome(action.outcome)}`));
     for (const request of this.localRequests) lines.push(indent(`${request.who} listed ${request.path}:\n${request.answer.text}`.trimEnd()));

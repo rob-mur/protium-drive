@@ -93,3 +93,8 @@ Given(/^the folder the user mounts the Drive at holds the file "([^"]*)"$/, func
 Given(/^the folder the user mounts the Drive at was left mounted by a mount that was killed$/, function (this: DriveWorld) {
   this.mountFolder = { kind: "left mounted" };
 });
+
+Given(/^the user mounts the Drive at a folder with a dir cache time of "([^"]*)"$/, function (this: DriveWorld, time: string) {
+  this.mounted = true;
+  this.dirCacheTime = time;
+});

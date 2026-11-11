@@ -75,3 +75,11 @@ When(/^the user mounts the Drive at that folder$/, async function (this: DriveWo
 When(/^the user writes "([^"]*)" to the mounted file "([^"]*)"$/, async function (this: DriveWorld, content: string, path: string) {
   await this.writeMountedFile(path, content);
 });
+
+When(/^the user lists the mounted folder "([^"]*)"$/, async function (this: DriveWorld, path: string) {
+  await this.listMountedFolder(path);
+});
+
+When(/^the user starts the mount$/, async function (this: DriveWorld) {
+  await this.ensureMounted();
+});

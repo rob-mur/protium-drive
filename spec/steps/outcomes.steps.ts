@@ -2,9 +2,13 @@
 // with what the Drive counted while the user looked.
 import { type DataTable, Then } from "@cucumber/cucumber";
 
-import type { CallCounts } from "../support/send/control.ts";
+import { poll } from "@cd-pipeline/support";
+import { join } from "node:path";
+
+import { Control, type CallCounts } from "../support/send/control.ts";
+import { listMounted, type MountOutcome } from "../support/send/mount.ts";
 import { claim, decode, last, refusedWith, type Row, says, showsExactly, sum } from "./claims.ts";
-import type { DriveWorld } from "./world.ts";
+import { DIR_CACHE_TIME_FLAG, type DriveWorld } from "./world.ts";
 
 function method(calls: CallCounts | undefined, name: string): number {
   return calls?.methods[name] ?? 0;
@@ -89,3 +93,31 @@ Then(
     claim(message.includes(this.dirs.mountpoint), () => `the mount's message does not name ${this.dirs.mountpoint}: ${message}`);
   },
 );
+
+Then(
+  /^within (\d+) seconds the mounted folder "([^"]*)" holds exactly "([^"]*)"$/,
+  async function (this: DriveWorld, seconds: string, folder: string, names: string) {
+    const mount = this.mount;
+    claim(mount, () => `nothing was mounted.\n${this.whatHappened()}`);
+    const want = JSON.stringify(names.split(", ").sort());
+    let last: MountOutcome | undefined;
+    const listed = () => (last ? JSON.stringify(decode(last.stdout).split("\n").filter(Boolean).sort()) : "nothing");
+    await poll(async () => {
+      last = await listMounted(join(mount.mountpoint, folder));
+      return last.exitCode === 0 && listed() === want;
+    }, { withinMs: Number(seconds) * 1000 });
+    claim(last, () => `the mounted folder "${folder}" was never listed.\n${this.whatHappened()}`);
+    claim(last.exitCode === 0, () => `listing the mounted folder "${folder}" failed (${last!.command}): ${last!.stderr}\n${this.whatHappened()}`);
+    claim(listed() === want, () => `after ${seconds} s the mounted folder "${folder}" holds ${listed()}, not ${want}.\n${this.whatHappened()}`);
+  },
+);
+
+Then(/^the mount exited with status 2, naming the dir cache time, and served nothing$/, function (this: DriveWorld) {
+  const mount = this.mount;
+  claim(mount, () => `the mount was never started.\n${this.whatHappened()}`);
+  const ending = mount.process.ending;
+  claim(ending, () => `the mount did not end on its own.\n${this.whatHappened()}`);
+  claim(ending.code === 2, () => `the mount exited with ${ending.code ?? ending.signal}, not 2.\n${this.whatHappened()}`);
+  claim(mount.process.stderr.includes(DIR_CACHE_TIME_FLAG), () => `the mount's message does not name ${DIR_CACHE_TIME_FLAG}.\n${this.whatHappened()}`);
+  claim(Control.fromOutput(mount.process.output) === undefined, () => `the mount started the serve before it refused.\n${this.whatHappened()}`);
+});

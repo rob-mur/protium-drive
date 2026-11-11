@@ -161,6 +161,22 @@
       "failing_step": [
         "^the last listing shows (\\d+) files, and the Drive loaded (\\d+) nodes in all$"
       ]
+    },
+    {
+      "id": "a-file-added-elsewhere-shows-in-the-mount-after-the-dir-cache-time",
+      "path": "spec/features/mount-settings.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^within (\\d+) seconds the mounted folder \"([^\"]*)\" holds exactly \"([^\"]*)\"$"
+      ]
+    },
+    {
+      "id": "a-dir-cache-time-that-is-not-a-duration-stops-the-mount-before-the-serve",
+      "path": "spec/features/mount-settings.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the mount exited with status 2, naming the dir cache time, and served nothing$"
+      ]
     }
   ]
 }
