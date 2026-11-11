@@ -121,10 +121,7 @@
     {
       "id": "a-request-under-a-foreign-name-is-refused",
       "path": "spec/features/local-access.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the serve refuses the web page as misdirected, and the Drive did not list \"([^\"]*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "the-mount-refuses-a-request-without-its-credential",
