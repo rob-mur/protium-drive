@@ -157,10 +157,7 @@
     {
       "id": "a-restarted-serve-lists-a-large-folder-without-loading-its-nodes",
       "path": "spec/features/listing-performance.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the last listing shows (\\d+) files, and the Drive loaded (\\d+) nodes in all$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-file-added-elsewhere-shows-in-the-mount-after-the-dir-cache-time",
