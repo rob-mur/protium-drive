@@ -231,34 +231,22 @@
     {
       "id": "a-mount-without-a-session-exits-as-needing-login",
       "path": "spec/features/needs-login.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the mount exits (\\d+) saying \"(.*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-mount-on-a-refused-session-exits-as-needing-login",
       "path": "spec/features/needs-login.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the mount exits (\\d+) saying \"(.*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "only-the-user-can-read-the-saved-session",
       "path": "spec/features/session-status.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the state directory holds \"([^\"]*)\" with mode (0[0-7]{3}), and the state directory has mode (0[0-7]{3})$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "the-serve-listens-only-on-loopback-by-default",
       "path": "spec/features/local-access.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the serve's port listens on ([0-9.]+) and on no other address$"
-      ]
+      "expected_status": "green"
     }
   ]
 }
