@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { DriveSeed, parentOf } from "../support/drive-seed.ts";
 import { type Answer, Binary, type Home, indent, type Running } from "../support/send/binary.ts";
 import { type CallCounts, Control, type Fault } from "../support/send/control.ts";
-import { type LocalAnswer, type ProcessView, processTree, rawRequest } from "../support/send/local.ts";
+import { listeningAddresses, type LocalAnswer, type ProcessView, processTree, rawRequest } from "../support/send/local.ts";
 import { isMounted, leaveKilledMount, listMounted, mountIds, type MountOutcome, readMounted, unmount, writeMounted } from "../support/send/mount.ts";
 import { describe as describeOutcome, type Outcome, Rclone, refusal } from "../support/send/rclone.ts";
 import { type Notification, NotifySocket } from "../support/send/systemd.ts";
@@ -146,11 +146,15 @@ export class DriveWorld extends World {
   readonly localRequests: LocalRequestRecord[] = [];
   /** The mount's processes, as another program read them from the process table. */
   mountProcesses?: ProcessView[];
+  /** The addresses the serve's port listened on, as another program read them. */
+  serveListensOn?: string[];
   mountedListings: { path: string; outcome: MountOutcome }[] = [];
   /** What the mount said while it started, from its start until it said it was ready. */
   readonly readiness: Readiness = { notifications: [] };
   /** The mounts that ended before the one in `mount` started, oldest first. */
   endedMounts: (Serving & { mountpoint: string })[] = [];
+  /** Whether the folder was mounted just before a When stopped the mount. */
+  mountedBeforeStop?: boolean;
   /** The `migrate-node-keys` run a When made. */
   migration?: { path: string; answer: Answer };
   /** What went wrong while acting, for the Then's failure message. */
@@ -658,6 +662,7 @@ export class DriveWorld extends World {
       this.trouble("there was no mount to stop");
       return;
     }
+    this.mountedBeforeStop = isMounted(mount.mountpoint);
     await mount.process.stop();
   }
 
@@ -741,6 +746,12 @@ export class DriveWorld extends World {
     this.mountProcesses = processTree(pid);
   }
 
+  /** A program that reads which addresses the serve's port listens on, as `ss -ltn` does. */
+  async readServeListeningAddresses(): Promise<void> {
+    const serve = await this.ensureServing();
+    this.serveListensOn = listeningAddresses(Number(new URL(serve.url).port));
+  }
+
   // --- the record -----------------------------------------------------------------
 
   trouble(text: string): void {
@@ -773,6 +784,7 @@ export class DriveWorld extends World {
     for (const { path, outcome } of this.mountedListings) lines.push(indent(`listing the mounted folder ${path} (${outcome.command}): exited ${outcome.exitCode}\n${new TextDecoder().decode(outcome.stdout)}${outcome.stderr}`.trimEnd()));
     if (this.migration) lines.push(indent(`migrating the node keys under ${this.migration.path}: exited ${this.migration.answer.exitCode}\n${this.migration.answer.stdout}${this.migration.answer.stderr}`.trimEnd()));
     for (const action of this.actions) lines.push(indent(`${action.kind} ${action.path}: ${describeOutcome(action.outcome)}`));
+    if (this.serveListensOn) lines.push(`  the serve's port listened on: ${this.serveListensOn.join(", ") || "nothing"}`);
     for (const request of this.localRequests) lines.push(indent(`${request.who} listed ${request.path}:\n${request.answer.text}`.trimEnd()));
     for (const trouble of this.troubles) lines.push(`  trouble: ${trouble}`);
     return lines.join("\n");

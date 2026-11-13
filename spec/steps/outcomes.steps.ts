@@ -6,7 +6,7 @@ import { poll } from "@cd-pipeline/support";
 import { join } from "node:path";
 
 import { Control, type CallCounts } from "../support/send/control.ts";
-import { listMounted, type MountOutcome, readMounted } from "../support/send/mount.ts";
+import { isMounted, listMounted, type MountOutcome, readMounted } from "../support/send/mount.ts";
 import { claim, decode, last, refusedWith, type Row, says, showsExactly, sum } from "./claims.ts";
 import { DIR_CACHE_TIME_FLAG, type DriveWorld, mountedLines } from "./world.ts";
 
@@ -171,4 +171,24 @@ Then(/^the mount's log names "([^"]*)" as not yet on the Drive$/, function (this
   claim(mount.process.ending, () => `the mount did not end.\n${this.whatHappened()}`);
   const pending = mount.process.output.split("\n").filter((line) => line.includes(path) && line.includes("not yet on the Drive"));
   claim(pending.length > 0, () => `the mount's log has no line naming "${path}" as not yet on the Drive.\n${this.whatHappened()}`);
+});
+
+Then(/^the mount exits 0 on its own, and the folder is no longer mounted$/, function (this: DriveWorld) {
+  const mount = this.mount;
+  claim(mount, () => `the mount was never started.\n${this.whatHappened()}`);
+  claim(this.mountedBeforeStop, () => `${mount.mountpoint} was not mounted when the mount was stopped.\n${this.whatHappened()}`);
+  const ending = mount.process.ending;
+  claim(ending, () => `the mount did not end.\n${this.whatHappened()}`);
+  claim(!ending.forced, () => `the mount did not end on its own after it was stopped, so it was killed.\n${this.whatHappened()}`);
+  claim(ending.code === 0, () => `the mount exited with ${ending.code ?? ending.signal}, not 0.\n${this.whatHappened()}`);
+  claim(!isMounted(mount.mountpoint), () => `${mount.mountpoint} is still mounted after the mount ended.\n${this.whatHappened()}`);
+});
+
+Then(/^the mount exits (\d+) saying "(.*)"$/, async function (this: DriveWorld, code: string, text: string) {
+  const mount = this.mount?.process;
+  claim(mount, () => `the mount was never started.\n${this.whatHappened()}`);
+  await mount.waitForEnd(10_000);
+  claim(mount.ending, () => `the mount was still running 10 s after the last step.\n${this.whatHappened()}`);
+  claim(mount.output.includes(text), () => `the mount did not say "${text}".\n${this.whatHappened()}`);
+  claim(mount.ending.code === Number(code), () => `the mount said "${text}" but did not exit ${code}.\n${this.whatHappened()}`);
 });

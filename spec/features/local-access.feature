@@ -20,3 +20,10 @@ Feature: Only the user's own clients reach the Drive through the local port
     And the user mounts the Drive at a folder
     When another program reads the mount's processes from the process table
     Then rclone holds the mount's credential in its environment, and no command line of the mount's processes holds it
+
+  @id:the-serve-listens-only-on-loopback-by-default
+  Scenario: The serve listens only on the loopback address unless the user names another
+    Given a Drive whose My files holds the folder "Photos"
+    When the user starts the serve
+    And another program reads which addresses the serve's port listens on
+    Then the serve's port listens on 127.0.0.1 and on no other address

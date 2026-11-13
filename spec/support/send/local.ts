@@ -93,3 +93,34 @@ function quietRead(path: string): string | undefined {
     return undefined;
   }
 }
+
+/**
+ * The addresses on which a TCP socket listens on `port`, as a program reads them from
+ * `/proc/net/tcp` and `/proc/net/tcp6`, such as `127.0.0.1`, `0.0.0.0` or `::`.
+ */
+export function listeningAddresses(port: number): string[] {
+  const addresses: string[] = [];
+  for (const table of ["/proc/net/tcp", "/proc/net/tcp6"]) {
+    for (const line of (quietRead(table) ?? "").split("\n").slice(1)) {
+      // Field 1 is the local address as hex `address:port`; field 3 is the state, 0A for LISTEN.
+      const fields = line.trim().split(/\s+/);
+      const [address, hexPort] = (fields[1] ?? "").split(":");
+      if (fields[3] !== "0A" || !address || parseInt(hexPort ?? "", 16) !== port) continue;
+      addresses.push(address.length === 8 ? ipv4(address) : ipv6(address));
+    }
+  }
+  return addresses;
+}
+
+/** An IPv4 address as `/proc/net/tcp` writes it: four bytes in hex, in the machine's order. */
+function ipv4(hex: string): string {
+  return Buffer.from(hex, "hex").readUInt32LE(0).toString(16).padStart(8, "0").match(/../g)!.map((byte) => parseInt(byte, 16)).join(".");
+}
+
+/** An IPv6 address as `/proc/net/tcp6` writes it: four 32-bit words in hex, each in the machine's order. */
+function ipv6(hex: string): string {
+  const bytes = Buffer.alloc(16);
+  for (let word = 0; word < 4; word++) bytes.writeUInt32BE(Buffer.from(hex.slice(word * 8, word * 8 + 8), "hex").readUInt32LE(0), word * 4);
+  const groups = bytes.toString("hex").match(/..../g)!.map((group) => parseInt(group, 16).toString(16));
+  return groups.join(":").replace(/(^|:)0(:0)+(:|$)/, "::");
+}

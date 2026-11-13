@@ -63,3 +63,11 @@ Feature: Mounting the Drive as a folder
     When the user writes "sand and snow" to the mounted file "Photos/new.jpg"
     And the mount is stopped before the write reaches the Drive
     Then the mount's log names "Photos/new.jpg" as not yet on the Drive
+
+  @id:a-stopped-mount-unmounts-the-folder-and-exits-0
+  Scenario: A mount stopped as a service manager stops it unmounts the folder and exits 0
+    Given a Drive whose My files holds the folder "Photos"
+    And the user mounts the Drive at a folder
+    When the user starts the mount
+    And the mount is stopped
+    Then the mount exits 0 on its own, and the folder is no longer mounted

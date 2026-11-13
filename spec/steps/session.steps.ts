@@ -1,5 +1,5 @@
 // The Thens about signing in, the sign-in status, signing out and the session's refreshes.
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 
 import { Then } from "@cucumber/cucumber";
 
@@ -22,6 +22,20 @@ Then(
     );
     claim(this.sessionBeforeSignOut, () => `the state directory held no "${file}" before the user signed out.\n${this.whatHappened()}`);
     claim(!existsSync(`${this.dirs.state}/${file}`), () => `the state directory still holds "${file}"`);
+  },
+);
+
+Then(
+  /^the state directory holds "([^"]*)" with mode (0[0-7]{3}), and the state directory has mode (0[0-7]{3})$/,
+  function (this: DriveWorld, file: string, fileMode: string, dirMode: string) {
+    const signIn = this.signIns.at(-1);
+    claim(signIn, () => `the user did not sign in.\n${this.whatHappened()}`);
+    claim(signIn.ending?.code === 0, () => `signing in did not exit 0.\n${this.whatHappened()}`);
+    const path = `${this.dirs.state}/${file}`;
+    claim(existsSync(path), () => `the state directory holds no "${file}" after the user signed in.\n${this.whatHappened()}`);
+    const modeOf = (each: string) => `0${(statSync(each).mode & 0o777).toString(8).padStart(3, "0")}`;
+    claim(modeOf(path) === fileMode, () => `"${file}" has mode ${modeOf(path)}, not ${fileMode}`);
+    claim(modeOf(this.dirs.state) === dirMode, () => `the state directory has mode ${modeOf(this.dirs.state)}, not ${dirMode}`);
   },
 );
 

@@ -37,3 +37,18 @@ Feature: A serve that needs a new sign-in stops, and a sign-in cannot race a run
     When the user starts the serve
     And the user signs out
     Then signing out exits non-zero, naming the serve's process id, and the state directory still holds "session.json"
+
+  @id:a-mount-without-a-session-exits-as-needing-login
+  Scenario: A mount started without a session exits with the needs-login status
+    Given the user has not signed in
+    And the user mounts the Drive at a folder
+    When the user starts the mount
+    Then the mount exits 3 saying "proton-drive-mount auth login"
+
+  @id:a-mount-on-a-refused-session-exits-as-needing-login
+  Scenario: A mount started on a session Proton refused exits with the needs-login status
+    Given a Drive whose My files holds the folder "Photos"
+    And Proton has refused the stored session
+    And the user mounts the Drive at a folder
+    When the user starts the mount
+    Then the mount exits 3 saying "Proton refused the stored session"

@@ -219,6 +219,46 @@
       "failing_step": [
         "^the mount's log names \"([^\"]*)\" as not yet on the Drive$"
       ]
+    },
+    {
+      "id": "a-stopped-mount-unmounts-the-folder-and-exits-0",
+      "path": "spec/features/mount.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the mount exits 0 on its own, and the folder is no longer mounted$"
+      ]
+    },
+    {
+      "id": "a-mount-without-a-session-exits-as-needing-login",
+      "path": "spec/features/needs-login.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the mount exits (\\d+) saying \"(.*)\"$"
+      ]
+    },
+    {
+      "id": "a-mount-on-a-refused-session-exits-as-needing-login",
+      "path": "spec/features/needs-login.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the mount exits (\\d+) saying \"(.*)\"$"
+      ]
+    },
+    {
+      "id": "only-the-user-can-read-the-saved-session",
+      "path": "spec/features/session-status.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the state directory holds \"([^\"]*)\" with mode (0[0-7]{3}), and the state directory has mode (0[0-7]{3})$"
+      ]
+    },
+    {
+      "id": "the-serve-listens-only-on-loopback-by-default",
+      "path": "spec/features/local-access.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the serve's port listens on ([0-9.]+) and on no other address$"
+      ]
     }
   ]
 }

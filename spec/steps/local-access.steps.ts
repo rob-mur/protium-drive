@@ -21,6 +21,10 @@ When(/^another program reads the mount's processes from the process table$/, asy
   await this.readMountProcesses();
 });
 
+When(/^another program reads which addresses the serve's port listens on$/, async function (this: DriveWorld) {
+  await this.readServeListeningAddresses();
+});
+
 Then(/^the serve refuses the web page as misdirected, and the Drive did not list "([^"]*)"$/, function (this: DriveWorld, folder: string) {
   refusedBeforeTheDrive(this, 421, folder);
 });
@@ -37,6 +41,14 @@ Then(/^rclone holds the mount's credential in its environment, and no command li
   const credential = rclone.env[RCLONE_TOKEN]!;
   const showing = processes.filter((each) => each.argv.some((arg) => arg.includes(credential)));
   claim(showing.length === 0, () => `the credential is on the command line of process(es) ${showing.map((each) => each.pid).join(", ")}`);
+});
+
+Then(/^the serve's port listens on ([0-9.]+) and on no other address$/, function (this: DriveWorld, address: string) {
+  const addresses = this.serveListensOn;
+  claim(addresses, () => `no other program read the serve's port.\n${this.whatHappened()}`);
+  claim(addresses.includes(address), () => `the serve's port does not listen on ${address}.\n${this.whatHappened()}`);
+  const others = addresses.filter((each) => each !== address);
+  claim(others.length === 0, () => `the serve's port also listens on ${others.join(", ")}.\n${this.whatHappened()}`);
 });
 
 function refusedBeforeTheDrive(world: DriveWorld, status: number, folder: string): void {

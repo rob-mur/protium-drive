@@ -10,6 +10,10 @@ When(/^the user signs out$/, async function (this: DriveWorld) {
   await this.signOut();
 });
 
+When(/^the user signs in$/, async function (this: DriveWorld) {
+  await this.signInAgain();
+});
+
 When(/^the user tries to sign in again$/, async function (this: DriveWorld) {
   await this.trySigningIn();
 });
@@ -102,4 +106,8 @@ When(/^the mount is stopped before the write reaches the Drive$/, async function
 
 When(/^the user starts the mount again on (the same|another) port$/, async function (this: DriveWorld, port: string) {
   await this.mountAgain(port === "the same" ? "same" : "another");
+});
+
+When(/^the mount is stopped$/, async function (this: DriveWorld) {
+  await this.stopMount();
 });
