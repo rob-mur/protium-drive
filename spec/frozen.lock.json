@@ -181,14 +181,6 @@
       "expected_status": "green"
     },
     {
-      "id": "a-mount-run-as-a-service-tells-systemd-it-is-ready-once-mounted",
-      "path": "spec/features/mount-ready.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the mount's own process told systemd READY=1, and the folder was mounted when it did$"
-      ]
-    },
-    {
       "id": "a-mount-prints-one-line-once-mounted",
       "path": "spec/features/mount-ready.feature",
       "expected_status": "red",

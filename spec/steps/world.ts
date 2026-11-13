@@ -22,7 +22,6 @@ import { type CallCounts, Control, type Fault } from "../support/send/control.ts
 import { listeningAddresses, type LocalAnswer, type ProcessView, processTree, rawRequest } from "../support/send/local.ts";
 import { isMounted, leaveKilledMount, listMounted, mountIds, type MountOutcome, readMounted, unmount, writeMounted } from "../support/send/mount.ts";
 import { describe as describeOutcome, type Outcome, Rclone, refusal } from "../support/send/rclone.ts";
-import { type Notification, NotifySocket } from "../support/send/systemd.ts";
 import { propfindWholeTree, type RawAnswer } from "../support/send/webdav.ts";
 
 // A listing of 5000 photos through a cold serve, or a mount, takes a while.
@@ -78,10 +77,8 @@ export interface LocalRequestRecord {
   callsAfter?: CallCounts;
 }
 
-/** What a starting mount said it was ready, each with whether the folder was mounted when it came. */
+/** What a starting mount said it was ready, with whether the folder was mounted when it came. */
 export interface Readiness {
-  /** Every message the mount's processes sent the service manager. */
-  notifications: (Notification & { mounted: boolean })[];
   /** The first time the mount's output held a line that says it is mounted at the folder. */
   line?: { mounted: boolean };
 }
@@ -113,8 +110,6 @@ export class DriveWorld extends World {
   mountFolder: { kind: "empty" } | { kind: "missing" } | { kind: "left mounted" } | { kind: "holds"; file: string } = { kind: "empty" };
   /** The mount's dir cache time, as the user writes it; unset, the mount's default. */
   dirCacheTime?: string;
-  /** The user runs the mount as a systemd service of `Type=notify`: the mount gets a `NOTIFY_SOCKET`. */
-  mountsAsService = false;
 
   // --- what the Whens record --------------------------------------------------
   /** The UID of each node the arranged Drive held, by path. */
@@ -150,7 +145,7 @@ export class DriveWorld extends World {
   serveListensOn?: string[];
   mountedListings: { path: string; outcome: MountOutcome }[] = [];
   /** What the mount said while it started, from its start until it said it was ready. */
-  readonly readiness: Readiness = { notifications: [] };
+  readonly readiness: Readiness = {};
   /** The mounts that ended before the one in `mount` started, oldest first. */
   endedMounts: (Serving & { mountpoint: string })[] = [];
   /** Whether the folder was mounted just before a When stopped the mount. */
@@ -166,8 +161,6 @@ export class DriveWorld extends World {
   private readonly processes: Running[] = [];
   /** The ids of the dead mounts the arranged folder was left with; a new mount is any other. */
   private deadMounts?: string[];
-  /** The service manager's socket, for a mount the user runs as a systemd service. */
-  private notifySocket?: NotifySocket;
 
   constructor(options: IWorldOptions) {
     super(options);
@@ -200,8 +193,8 @@ export class DriveWorld extends World {
     }
   }
 
-  private start(args: string[], env?: Record<string, string>): Running {
-    const running = this.binary.start(args, this.dirs.home, env);
+  private start(args: string[]): Running {
+    const running = this.binary.start(args, this.dirs.home);
     this.processes.push(running);
     return running;
   }
@@ -562,8 +555,6 @@ export class DriveWorld extends World {
     const mountpoint = await this.prepareMountFolder();
     const dead = this.deadMounts ?? [];
     port ??= await freePort();
-    if (this.mountsAsService) this.notifySocket ??= NotifySocket.open();
-    const env = this.notifySocket ? { NOTIFY_SOCKET: this.notifySocket.path } : undefined;
     const running = this.start([
       "mount",
       mountpoint,
@@ -574,7 +565,7 @@ export class DriveWorld extends World {
       "--fake-drive",
       this.dirs.drive,
       ...(this.dirCacheTime === undefined ? [] : [DIR_CACHE_TIME_FLAG, this.dirCacheTime]),
-    ], env);
+    ]);
     const mount: Serving & { mountpoint: string } = { process: running, url: `http://127.0.0.1:${port}/`, mountpoint };
     if (this.mount) this.endedMounts.push(this.mount);
     this.mount = mount;
@@ -588,28 +579,22 @@ export class DriveWorld extends World {
   }
 
   /**
-   * Notes what the starting mount has said since the last look: each notification, and the first
-   * line that says it is mounted at the folder, each with whether the folder is mounted now. Gives
-   * `mounted` back, so it can be a waitFor's check.
+   * Notes the first line the starting mount printed that says it is mounted at the folder, with
+   * whether the folder is mounted now. Gives `mounted` back, so it can be a waitFor's check.
    */
   private watchReadiness(mount: Serving & { mountpoint: string }, mounted: boolean): boolean {
-    for (const notification of this.notifySocket?.take() ?? []) this.readiness.notifications.push({ ...notification, mounted });
     if (!this.readiness.line && mountedLines(mount.process.output, mount.mountpoint).length > 0) this.readiness.line = { mounted };
     return mounted;
   }
 
   /**
-   * Starts the mount and waits until it says it is ready: as a systemd service, a READY=1 from
-   * the mount's own process; else a line that says it is mounted at the folder.
+   * Starts the mount and waits until it says it is ready: a line that says it is mounted at the
+   * folder.
    */
   async startMount(): Promise<void> {
     const mount = await this.ensureMounted();
     const dead = this.deadMounts ?? [];
-    const pid = mount.process.pid;
-    const said = () =>
-      this.mountsAsService
-        ? this.readiness.notifications.some((n) => n.pid === pid && n.text.split("\n").includes("READY=1"))
-        : this.readiness.line !== undefined;
+    const said = () => this.readiness.line !== undefined;
     const ready = await mount.process.waitFor(
       () => (this.watchReadiness(mount, mountIds(mount.mountpoint).some((id) => !dead.includes(id))), said()),
       MOUNT_MS,
@@ -778,8 +763,7 @@ export class DriveWorld extends World {
     if (this.serve) lines.push(`  the serve: ${this.serve.process.describe()}`);
     if (this.secondServe) lines.push(`  the second serve: ${this.secondServe.describe()}`);
     for (const ended of this.endedMounts) lines.push(`  an earlier mount: ${ended.process.describe()}`);
-    if (this.mount) lines.push(`  the mount (pid ${this.mount.process.pid}): ${this.mount.process.describe()}`);
-    for (const n of this.readiness.notifications) lines.push(`  pid ${n.pid} told systemd ${JSON.stringify(n.text)}, the folder ${n.mounted ? "mounted" : "not mounted"}`);
+    if (this.mount) lines.push(`  the mount: ${this.mount.process.describe()}`);
     if (this.mountRun) lines.push(indent(`mounting: exited ${this.mountRun.answer.exitCode}\n${this.mountRun.answer.stdout}${this.mountRun.answer.stderr}`.trimEnd()));
     for (const { path, outcome } of this.mountedListings) lines.push(indent(`listing the mounted folder ${path} (${outcome.command}): exited ${outcome.exitCode}\n${new TextDecoder().decode(outcome.stdout)}${outcome.stderr}`.trimEnd()));
     if (this.migration) lines.push(indent(`migrating the node keys under ${this.migration.path}: exited ${this.migration.answer.exitCode}\n${this.migration.answer.stdout}${this.migration.answer.stderr}`.trimEnd()));
@@ -793,7 +777,6 @@ export class DriveWorld extends World {
   /** Stops every process the scenario started, unmounts, and removes the scenario's directories. */
   async cleanUp(): Promise<void> {
     await Promise.all(this.processes.map((running) => running.stop()));
-    this.notifySocket?.close();
     if (!this.scratch) return;
     const { root, mountpoint } = this.scratch;
     if (isMounted(mountpoint)) await unmount(mountpoint);

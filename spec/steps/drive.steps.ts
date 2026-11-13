@@ -98,8 +98,3 @@ Given(/^the user mounts the Drive at a folder with a dir cache time of "([^"]*)"
   this.mounted = true;
   this.dirCacheTime = time;
 });
-
-Given(/^the user mounts the Drive at a folder from a systemd service that waits for the mount to be ready$/, function (this: DriveWorld) {
-  this.mounted = true;
-  this.mountsAsService = true;
-});

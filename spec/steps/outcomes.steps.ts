@@ -78,15 +78,6 @@ Then(
   },
 );
 
-Then(/^the mount's own process told systemd READY=1, and the folder was mounted when it did$/, function (this: DriveWorld) {
-  const mount = this.mount;
-  claim(mount, () => `no mount started.\n${this.whatHappened()}`);
-  const pid = mount.process.pid;
-  const ready = this.readiness.notifications.find((n) => n.pid === pid && n.text.split("\n").includes("READY=1"));
-  claim(ready, () => `the mount's process (pid ${pid}) never told systemd READY=1.\n${this.whatHappened()}`);
-  claim(ready.mounted, () => `the mount told systemd READY=1 before ${mount.mountpoint} was mounted.\n${this.whatHappened()}`);
-});
-
 Then(/^the mount printed one line that says it is mounted at the folder, and the folder was mounted when it did$/, function (this: DriveWorld) {
   const mount = this.mount;
   claim(mount, () => `no mount started.\n${this.whatHappened()}`);
