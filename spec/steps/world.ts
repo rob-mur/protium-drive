@@ -37,6 +37,11 @@ const SETTLE_MS = 10_000;
 /** The mount's option that sets rclone's dir cache time. */
 export const DIR_CACHE_TIME_FLAG = "--dir-cache-time";
 
+/** The option that sets how much the binary logs, for pdm and the rclone it runs. */
+export const LOG_LEVEL_FLAG = "--log-level";
+/** The environment variable that sets the same as LOG_LEVEL_FLAG. */
+export const LOG_LEVEL_VARIABLE = "PDM_LOG_LEVEL";
+
 /** The scenario's own directories, under one temporary directory. */
 interface Scratch {
   root: string;
@@ -110,6 +115,10 @@ export class DriveWorld extends World {
   mountFolder: { kind: "empty" } | { kind: "missing" } | { kind: "left mounted" } | { kind: "holds"; file: string } = { kind: "empty" };
   /** The mount's dir cache time, as the user writes it; unset, the mount's default. */
   dirCacheTime?: string;
+  /** The log level the user gives the serve or the mount with LOG_LEVEL_FLAG; unset, none. */
+  logLevel?: string;
+  /** The value of LOG_LEVEL_VARIABLE in the environment the user starts the mount in; unset, none. */
+  logLevelVariable?: string;
 
   // --- what the Whens record --------------------------------------------------
   /** The UID of each node the arranged Drive held, by path. */
@@ -193,8 +202,8 @@ export class DriveWorld extends World {
     }
   }
 
-  private start(args: string[]): Running {
-    const running = this.binary.start(args, this.dirs.home);
+  private start(args: string[], variables: Record<string, string> = {}): Running {
+    const running = this.binary.start(args, this.dirs.home, variables);
     this.processes.push(running);
     return running;
   }
@@ -323,7 +332,12 @@ export class DriveWorld extends World {
       this.dirs.drive,
       ...(this.host ? ["--host", this.host] : []),
       ...(this.root ? ["--root", this.root] : []),
+      ...this.logLevelArgs(),
     ];
+  }
+
+  private logLevelArgs(): string[] {
+    return this.logLevel === undefined ? [] : [LOG_LEVEL_FLAG, this.logLevel];
   }
 
   /** The process that serves the arranged Drive: the mount when a Given said the user mounts it, else the serve. */
@@ -565,7 +579,8 @@ export class DriveWorld extends World {
       "--fake-drive",
       this.dirs.drive,
       ...(this.dirCacheTime === undefined ? [] : [DIR_CACHE_TIME_FLAG, this.dirCacheTime]),
-    ]);
+      ...this.logLevelArgs(),
+    ], this.logLevelVariable === undefined ? {} : { [LOG_LEVEL_VARIABLE]: this.logLevelVariable });
     const mount: Serving & { mountpoint: string } = { process: running, url: `http://127.0.0.1:${port}/`, mountpoint };
     if (this.mount) this.endedMounts.push(this.mount);
     this.mount = mount;

@@ -86,9 +86,12 @@ export class Binary {
     return { exitCode: result.status ?? -1, stdout: result.stdout, stderr: result.stderr };
   }
 
-  /** Starts a command that runs until it is stopped, such as `serve`. */
-  start(args: string[], home?: Home): Running {
-    return start(this.path, args, { env: environment(home) });
+  /**
+   * Starts a command that runs until it is stopped, such as `serve`. `variables` are set in its
+   * environment on top of the suite's, as a user sets them in a shell or a service file.
+   */
+  start(args: string[], home?: Home, variables: Record<string, string> = {}): Running {
+    return start(this.path, args, { env: { ...environment(home), ...variables } });
   }
 }
 
