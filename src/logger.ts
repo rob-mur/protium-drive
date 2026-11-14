@@ -1,13 +1,31 @@
 import type { Logger } from '../vendor/proton-drive-sdk-account';
 
-/** Levels below the threshold go nowhere; the rest go to stderr, so stdout stays for answers. */
-export function createLogger(env: NodeJS.ProcessEnv = process.env): Logger {
-    const levels = { debug: 10, info: 20, warn: 30, error: 40 } as const;
-    const threshold = levels[(env.PDM_LOG_LEVEL ?? 'info') as keyof typeof levels] ?? levels.info;
-    const write = (level: keyof typeof levels) => (message: string, ...args: unknown[]) => {
-        if (levels[level] < threshold) return;
+/** The levels a user can log at, lowest first. */
+export const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
+export type LogLevel = (typeof LOG_LEVELS)[number];
+
+export function isLogLevel(value: string): value is LogLevel {
+    return (LOG_LEVELS as readonly string[]).includes(value);
+}
+
+/**
+ * The level from --log-level, else from PDM_LOG_LEVEL, else info; or a message that names the
+ * value that is not a level and where it came from.
+ */
+export function logLevel(flag: string | undefined, env: NodeJS.ProcessEnv): LogLevel | string {
+    const [source, value] = flag !== undefined ? ['--log-level', flag] : ['PDM_LOG_LEVEL', env.PDM_LOG_LEVEL];
+    if (value === undefined) return 'info';
+    if (isLogLevel(value)) return value;
+    return `Bad ${source} ${JSON.stringify(value)}: give debug, info, warn or error.`;
+}
+
+/** Levels below `level` go nowhere; the rest go to stderr, so stdout stays for answers. */
+export function createLogger(level: LogLevel = 'info'): Logger {
+    const threshold = LOG_LEVELS.indexOf(level);
+    const write = (at: LogLevel) => (message: string, ...args: unknown[]) => {
+        if (LOG_LEVELS.indexOf(at) < threshold) return;
         const rest = args.length ? ` ${args.map(String).join(' ')}` : '';
-        process.stderr.write(`${level}: ${message}${rest}\n`);
+        process.stderr.write(`${at}: ${message}${rest}\n`);
     };
     return { debug: write('debug'), info: write('info'), warn: write('warn'), error: write('error') };
 }

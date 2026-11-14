@@ -96,6 +96,44 @@ describe('bare and unknown invocations', () => {
     });
 });
 
+describe('log level', () => {
+    test('HELP lists --log-level with its levels, and names PDM_LOG_LEVEL under Environment', () => {
+        expect(HELP).toContain('--log-level LEVEL');
+        expect(HELP).toContain('debug, info, warn or error');
+        expect(HELP).toMatch(/\nEnvironment:\n {2}PDM_LOG_LEVEL /);
+    });
+
+    test('every command takes --log-level', async () => {
+        const stateDir = mkdtempSync(join(tmpdir(), 'pdm-main-log-level-'));
+        try {
+            const status = await runCommand(['auth', 'status', '--log-level', 'debug', '--state-dir', stateDir], {}, CONSOLE_OUTPUT_QUIET);
+            expect(status.code).toBe(1);
+            const logout = await runCommand(['auth', 'logout', '--log-level', 'warn', '--state-dir', stateDir], {}, CONSOLE_OUTPUT_QUIET);
+            expect(logout.code).toBe(0);
+            expect(run(['--log-level', 'debug'], ENV).code).toBe(2);
+            expect((await runCommand(['--log-level', 'debug', '--help'], {})).code).toBe(0);
+        } finally {
+            await rmAsync(stateDir, { recursive: true, force: true });
+        }
+    });
+
+    test('a level that is not a level exits 2 and names it, from the flag or from PDM_LOG_LEVEL, before any command starts', async () => {
+        const stateDir = mkdtempSync(join(tmpdir(), 'pdm-main-bad-level-'));
+        try {
+            for (const command of [['auth', 'status'], ['auth', 'logout'], ['auth', 'login'], ['serve'], ['mount', '/nonexistent-mountpoint'], ['migrate-node-keys', 'Photos']]) {
+                const withFlag = await runCommand([...command, '--log-level', 'loud', '--state-dir', stateDir], {}, CONSOLE_OUTPUT_QUIET);
+                expect(withFlag.code).toBe(2);
+                expect(withFlag.stderr).toContain('--log-level "loud"');
+                const withVariable = await runCommand([...command, '--state-dir', stateDir], { PDM_LOG_LEVEL: 'loud' }, CONSOLE_OUTPUT_QUIET);
+                expect(withVariable.code).toBe(2);
+                expect(withVariable.stderr).toContain('PDM_LOG_LEVEL "loud"');
+            }
+        } finally {
+            await rmAsync(stateDir, { recursive: true, force: true });
+        }
+    });
+});
+
 describe('serve dispatch', () => {
     test('HELP names the serve command and its flags', () => {
         expect(HELP).toContain('serve [--host 127.0.0.1] [--port 7395]');

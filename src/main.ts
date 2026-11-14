@@ -11,7 +11,7 @@ import { VERSION as SDK_VERSION } from '@protontech/drive-sdk';
 
 import { authLogin } from './auth/login.ts';
 import { ListingCacheFile } from './drive/listing-cache.ts';
-import { createLogger } from './logger.ts';
+import { createLogger, isLogLevel, logLevel } from './logger.ts';
 import { resolveStateDir } from './paths.ts';
 import { acquireStateLock } from './session/lock.ts';
 import { SessionFileStore } from './session/store.ts';
@@ -38,6 +38,9 @@ Usage:
   proton-drive-mount help
 
 Options:
+  --log-level LEVEL How much to log on stderr: debug, info, warn or error. Default: info.
+                    Every command takes it. mount gives rclone the same level (info and warn
+                    give rclone its default, NOTICE) and writes each rclone line as "rclone: LINE".
   --state-dir DIR   Where the session file lives.
                     Default: $XDG_STATE_HOME/proton-drive-mount (~/.local/state/proton-drive-mount).
   --fake-drive DIR  Use the fake drive kept in DIR instead of Proton. Nothing reaches Proton.
@@ -73,6 +76,9 @@ Options:
                     takes the same state lock.
   --dry-run         migrate-node-keys only lists the files it would migrate; it changes nothing.
 
+Environment:
+  PDM_LOG_LEVEL     The log level when --log-level is not given. --log-level wins.
+
 Exit status:
   0    Success.
   1    An error, for example another proton-drive-mount process holds the state directory
@@ -98,6 +104,7 @@ export function run(argv: string[], env: NodeJS.ProcessEnv = process.env): Answe
         args: argv,
         allowPositionals: true,
         options: {
+            'log-level': { type: 'string' },
             help: { type: 'boolean', short: 'h' },
             version: { type: 'boolean' },
         },
@@ -189,6 +196,7 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
             'vfs-cache-max-size': { type: 'string' },
             'cache-dir': { type: 'string' },
             'dry-run': { type: 'boolean' },
+            'log-level': { type: 'string' },
             help: { type: 'boolean', short: 'h' },
             version: { type: 'boolean' },
         },
@@ -200,6 +208,10 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
     if (values.help || command === 'help') {
         return { code: 0, stdout: HELP, stderr: '' };
     }
+    const level = logLevel(values['log-level'], env);
+    if (!isLogLevel(level)) {
+        return { code: 2, stdout: '', stderr: `${level}\n` };
+    }
     if (positionals[0] === 'migrate-node-keys') {
         const folder = positionals[1];
         if (positionals.length !== 2 || folder === undefined) {
@@ -209,7 +221,7 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
             stateDir: resolveStateDir(values['state-dir'], env),
             folder,
             dryRun: values['dry-run'] ?? false,
-            logger: createLogger(env),
+            logger: createLogger(level),
             fakeDriveDir: values['fake-drive'],
             print: output.print,
             error: output.error,
@@ -219,7 +231,7 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
     if (command === 'auth login') {
         const code = await authLogin({
             stateDir: resolveStateDir(values['state-dir'], env),
-            logger: createLogger(env),
+            logger: createLogger(level),
             fakeDriveDir: values['fake-drive'],
             print: output.print,
             signal,
@@ -243,7 +255,7 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
             stateDir: resolveStateDir(values['state-dir'], env),
             host: values.host ?? DEFAULT_HOST,
             port,
-            logger: createLogger(env),
+            logger: createLogger(level),
             fakeDriveDir: values['fake-drive'],
             root: values.root,
             signal,
@@ -271,7 +283,8 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
                 stateDir: resolveStateDir(values['state-dir'], env),
                 host: values.host ?? DEFAULT_HOST,
                 port,
-                logger: createLogger(env),
+                logger: createLogger(level),
+                logLevel: level,
                 fakeDriveDir: values['fake-drive'],
                 root: values.root,
                 signal,

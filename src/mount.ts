@@ -3,8 +3,12 @@ import { createHash, randomBytes } from 'node:crypto';
 import { closeSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
+import { createInterface } from 'node:readline';
+import type { Readable } from 'node:stream';
 
 import type { Logger } from '../vendor/proton-drive-sdk-account';
+
+import type { LogLevel } from './logger.ts';
 
 import { prepareMountpoint, type MountpointRefusal } from './mountpoint.ts';
 import { serveCommand, type ServeOptions } from './serve.ts';
@@ -116,8 +120,14 @@ function cachedFiles(cacheDir: string, folder: string): string[] {
     }
 }
 
-/** The arguments that mount the remote onto `mountpoint`. */
-export function rcloneArgs(mountpoint: string, cache: CacheSettings): string[] {
+/**
+ * rclone's level for each of ours. rclone's INFO adds a cache line every minute, so info and warn
+ * keep rclone at its default NOTICE.
+ */
+const RCLONE_LOG_LEVEL: Record<LogLevel, string> = { debug: 'DEBUG', info: 'NOTICE', warn: 'NOTICE', error: 'ERROR' };
+
+/** The arguments that mount the remote onto `mountpoint`, with rclone logging at `logLevel`. */
+export function rcloneArgs(mountpoint: string, cache: CacheSettings, logLevel: LogLevel): string[] {
     return [
         'mount',
         `${REMOTE}:`,
@@ -129,6 +139,8 @@ export function rcloneArgs(mountpoint: string, cache: CacheSettings): string[] {
         cache.vfsCacheMaxSize,
         '--cache-dir',
         cache.cacheDir,
+        '--log-level',
+        RCLONE_LOG_LEVEL[logLevel],
     ];
 }
 
@@ -284,10 +296,15 @@ export function rcloneEnv(base: Record<string, string | undefined>, extra: Recor
     return { ...env, ...extra, RCLONE_CONFIG: '/dev/fd/3' };
 }
 
+/** Writes each line of `stream` to stderr after "rclone: ", so a journal tells rclone's lines from ours. */
+function markLines(stream: Readable): void {
+    createInterface({ input: stream, crlfDelay: Infinity }).on('line', (line) => process.stderr.write(`rclone: ${line}\n`));
+}
+
 /**
  * Starts rclone with `config` as its config and `env` added to this process's environment (see rcloneEnv). rclone
  * reads the config from file descriptor 3, an open file that has no name left on disk, so there is
- * nothing to remove when the mount ends.
+ * nothing to remove when the mount ends. Its output goes to stderr, each line marked (see markLines).
  */
 export function spawnRclone(executable: string, args: string[], config: string, env: Record<string, string> = {}): RcloneProcess {
     let dir: string;
@@ -302,10 +319,12 @@ export function spawnRclone(executable: string, args: string[], config: string, 
     rmdirSync(dir);
     writeSync(fd, config);
     const child = spawn(executable, args, {
-        stdio: ['ignore', 'inherit', 'inherit', fd],
+        stdio: ['ignore', 'pipe', 'pipe', fd],
         env: rcloneEnv(process.env, env),
     });
     closeSync(fd);
+    markLines(child.stdout!);
+    markLines(child.stderr!);
     const exited = new Promise<number>((resolve) => {
         child.once('error', () => resolve(127));
         child.once('close', (code, signal) => resolve(code ?? (signal ? 128 : 1)));
@@ -319,7 +338,7 @@ export function spawnRclone(executable: string, args: string[], config: string, 
     };
 }
 
-export type MountOptions = Omit<ServeOptions, 'onListening' | 'credential'> & { mountpoint: string; cache: CacheSettings };
+export type MountOptions = Omit<ServeOptions, 'onListening' | 'credential'> & { mountpoint: string; cache: CacheSettings; logLevel?: LogLevel };
 
 export interface MountDeps {
     serve: (options: ServeOptions) => Promise<number>;
@@ -352,7 +371,7 @@ export function mountDeps(env: NodeJS.ProcessEnv = process.env): MountDeps {
  * starts the mount moves the files earlier mounts did not upload into this run's folder.
  */
 export async function mountCommand(options: MountOptions, deps: MountDeps = mountDeps()): Promise<number> {
-    const { mountpoint, cache, ...serveOptions } = options;
+    const { mountpoint, cache, logLevel = 'info', ...serveOptions } = options;
     const { signal, logger } = serveOptions;
     const refusal = await deps.prepareMountpoint(mountpoint);
     if (refusal) {
@@ -376,7 +395,9 @@ export async function mountCommand(options: MountOptions, deps: MountDeps = moun
     for (const adopted of moved) {
         logger.info(`${adopted}, left by an earlier mount, uploads now.`);
     }
-    const rclone = deps.startRclone(deps.rclone, rcloneArgs(mountpoint, cache), rcloneConfig(first), { RCLONE_WEBDAV_BEARER_TOKEN: credential });
+    const args = rcloneArgs(mountpoint, cache, logLevel);
+    logger.debug(`Starting rclone ${args.join(' ')}`);
+    const rclone = deps.startRclone(deps.rclone, args, rcloneConfig(first), { RCLONE_WEBDAV_BEARER_TOKEN: credential });
     logger.info(`Mounting ${first.href} at ${mountpoint}`);
     const aborted = new Promise<'signal'>((resolve) => {
         if (signal?.aborted) resolve('signal');

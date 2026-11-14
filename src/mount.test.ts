@@ -23,13 +23,13 @@ import {
 } from './mount.ts';
 import type { ServeOptions } from './serve.ts';
 
-const QUIET = createLogger({ PDM_LOG_LEVEL: 'error' });
+const QUIET = createLogger('error');
 
 const CACHE: CacheSettings = { ...DEFAULT_CACHE, cacheDir: '/c' };
 
 describe('rcloneArgs', () => {
     test('mounts the pdm: remote with the tested settings, and names neither the URL nor a credential', () => {
-        const args = rcloneArgs('/mnt/drive', CACHE);
+        const args = rcloneArgs('/mnt/drive', CACHE, 'info');
         expect(args.slice(0, 3)).toEqual(['mount', 'pdm:', '/mnt/drive']);
         expect(args.join(' ')).not.toContain('webdav');
         for (const [flag, value] of RCLONE_SETTINGS) {
@@ -40,7 +40,7 @@ describe('rcloneArgs', () => {
     });
 
     test('without cache settings, carries the documented defaults for a multi-device mount', () => {
-        const args = rcloneArgs('/m', CACHE).join(' ');
+        const args = rcloneArgs('/m', CACHE, 'info').join(' ');
         for (const setting of [
             '--vfs-cache-mode full',
             '--vfs-cache-max-size 6G',
@@ -62,16 +62,44 @@ describe('rcloneArgs', () => {
             dirCacheTime: '5s',
             vfsCacheMaxSize: '1G',
             cacheDir: '/var/cache/pdm',
-        }).join(' ');
+        }, 'info').join(' ');
         expect(args).toContain('--dir-cache-time 5s');
         expect(args).toContain('--vfs-cache-max-size 1G');
         expect(args).toContain('--cache-dir /var/cache/pdm');
         expect(args).not.toContain('--dir-cache-time 30s');
         expect(args).not.toContain('--vfs-cache-max-size 6G');
     });
+
+    test('gives rclone the log level: debug and error as they are, info and warn as its default NOTICE', () => {
+        for (const [level, rclone] of [
+            ['debug', 'DEBUG'],
+            ['info', 'NOTICE'],
+            ['warn', 'NOTICE'],
+            ['error', 'ERROR'],
+        ] as const) {
+            const args = rcloneArgs('/m', CACHE, level);
+            expect(args[args.indexOf('--log-level') + 1]).toBe(rclone);
+        }
+    });
 });
 
 describe('spawnRclone', () => {
+    test("writes each line rclone prints, on stdout or stderr, to stderr marked 'rclone: '", async () => {
+        const written: string[] = [];
+        const real = process.stderr.write;
+        process.stderr.write = ((chunk: string | Uint8Array) => {
+            written.push(String(chunk));
+            return true;
+        }) as typeof process.stderr.write;
+        try {
+            const rclone = spawnRclone('sh', ['-c', 'echo out; echo err 1>&2; printf "two\\nlast"'], '');
+            expect(await rclone.exited).toBe(0);
+        } finally {
+            process.stderr.write = real;
+        }
+        expect(written.join('').split('\n').filter(Boolean).sort()).toEqual(['rclone: err', 'rclone: last', 'rclone: out', 'rclone: two']);
+    });
+
     test('gives the child the config on file descriptor 3 from a file with no name left, and the env from rcloneEnv, also with no runtime dir', async () => {
         const out = mkdtempSync(join(tmpdir(), 'pdm-spawn-'));
         const saved = { runtime: process.env.XDG_RUNTIME_DIR, url: process.env.RCLONE_WEBDAV_URL };
@@ -373,6 +401,36 @@ describe('mountCommand', () => {
         expect(order).toEqual(['serve starts', 'rclone starts', 'rclone stops', 'serve stops']);
         expect(calls[0]!.config).toContain('url = http://127.0.0.1:4242/');
         expect(calls[0]!.args[2]).toBe('/mnt/x');
+    });
+
+    test('runs rclone at the log level it was given, and logs the rclone command at debug', async () => {
+        const calls: RcloneCall[] = [];
+        const debug: string[] = [];
+        const abort = new AbortController();
+        const running = mountCommand(
+            { ...BASE, logLevel: 'debug', logger: { ...QUIET, debug: (message: string) => void debug.push(message) }, signal: abort.signal },
+            { serve: fakeServe([]), startRclone: fakeRclone([], calls), rclone: 'rclone', prepareMountpoint: READY },
+        );
+        await new Promise((r) => setTimeout(r, 10));
+        abort.abort();
+        expect(await running).toBe(0);
+        const args = calls[0]!.args;
+        expect(args[args.indexOf('--log-level') + 1]).toBe('DEBUG');
+        expect(debug).toContain(`Starting rclone ${args.join(' ')}`);
+    });
+
+    test('without a log level, runs rclone at its default NOTICE', async () => {
+        const calls: RcloneCall[] = [];
+        const abort = new AbortController();
+        const running = mountCommand(
+            { ...BASE, signal: abort.signal },
+            { serve: fakeServe([]), startRclone: fakeRclone([], calls), rclone: 'rclone', prepareMountpoint: READY },
+        );
+        await new Promise((r) => setTimeout(r, 10));
+        abort.abort();
+        expect(await running).toBe(0);
+        const args = calls[0]!.args;
+        expect(args[args.indexOf('--log-level') + 1]).toBe('NOTICE');
     });
 
     test('stops the serve and fails when rclone ends on its own', async () => {

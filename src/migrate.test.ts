@@ -13,7 +13,7 @@ import { createLogger } from './logger.ts';
 import { migrateNodeKeys, TEMPORARY_SUFFIX, type MigrateOptions, type Migration } from './migrate.ts';
 
 const CLAIMED = '2026-08-14T09:30:00.000Z';
-const QUIET = createLogger({ PDM_LOG_LEVEL: 'error' });
+const QUIET = createLogger('error');
 const text = (value: string) => new TextEncoder().encode(value);
 const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 

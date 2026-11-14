@@ -13,7 +13,7 @@ import { SessionFileStore } from './session/store.ts';
 import { CONTROL_LINE, startReceiveArm } from '../fake-drive/receive-arm.ts';
 
 const DIRS: string[] = [];
-const QUIET = createLogger({ PDM_LOG_LEVEL: 'error' });
+const QUIET = createLogger('error');
 
 function scratch(label: string): string {
     const dir = mkdtempSync(join(tmpdir(), `pdm-serve-${label}-XXXXXX`));
