@@ -243,58 +243,37 @@
     {
       "id": "the-help-documents-the-log-level",
       "path": "spec/features/log-level.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the help lists --log-level with the levels debug, info, warn and error, and names PDM_LOG_LEVEL under Environment$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-mount-at-the-debug-log-level-logs-rclone-at-debug-under-its-name",
       "path": "spec/features/log-level.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the mount wrote its own debug lines, and rclone's debug lines each marked \"rclone: \"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "pdm-log-level-debug-sets-the-mount-to-debug",
       "path": "spec/features/log-level.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the mount wrote its own debug lines, and rclone's debug lines each marked \"rclone: \"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "the-log-level-option-wins-over-pdm-log-level",
       "path": "spec/features/log-level.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the mount started the serve, and wrote no debug or info lines of its own and no rclone line below ERROR$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-log-level-that-is-not-a-level-stops-the-mount-before-the-serve",
       "path": "spec/features/log-level.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the mount exited with status 2, naming \"([^\"]*)\", and served nothing$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-pdm-log-level-that-is-not-a-level-stops-the-mount-before-the-serve",
       "path": "spec/features/log-level.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the mount exited with status 2, naming \"([^\"]*)\", and served nothing$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "the-serve-takes-the-log-level",
       "path": "spec/features/log-level.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the listing succeeds, and the serve wrote no debug or info lines$"
-      ]
+      "expected_status": "green"
     }
   ]
 }
