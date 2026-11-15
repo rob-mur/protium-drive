@@ -21,10 +21,13 @@ Install the `stable` tag. It names the release that was last promoted. Main's ti
 been released yet. Nix reads a bare `ref=stable` as the branch `refs/heads/stable`, which
 does not exist, so write the tag in full.
 
+The repository is private, so Nix fetches it over ssh. The URL works only when the forge
+accepts an ssh key of yours: add your public key to your account on forgejo.clarob.uk first.
+
 Into your Nix profile:
 
 ```sh
-nix profile add "git+https://forgejo.clarob.uk/rob/proton-drive-mount?ref=refs/tags/stable"
+nix profile add "git+ssh://forgejo@forgejo.clarob.uk/rob/proton-drive-mount?ref=refs/tags/stable"
 proton-drive-mount --version
 ```
 
@@ -33,7 +36,7 @@ A Nix older than the rename of `install` to `add` spells it `nix profile install
 Or as an input of your own flake, for NixOS or home-manager:
 
 ```nix
-inputs.proton-drive-mount.url = "git+https://forgejo.clarob.uk/rob/proton-drive-mount?ref=refs/tags/stable";
+inputs.proton-drive-mount.url = "git+ssh://forgejo@forgejo.clarob.uk/rob/proton-drive-mount?ref=refs/tags/stable";
 
 # then, in your configuration:
 home.packages = [ inputs.proton-drive-mount.packages.${pkgs.stdenv.hostPlatform.system}.default ];
