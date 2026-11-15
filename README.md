@@ -17,10 +17,14 @@ The flake builds a package that pins its own Bun and rclone. You need Nix with f
 FUSE 3 on the computer: rclone mounts with `fusermount3`, which must be on `PATH` (on NixOS,
 `/run/wrappers/bin/fusermount3`).
 
+Install the `stable` tag. It names the release that was last promoted. Main's tip has not
+been released yet. Nix reads a bare `ref=stable` as the branch `refs/heads/stable`, which
+does not exist, so write the tag in full.
+
 Into your Nix profile:
 
 ```sh
-nix profile add git+https://forgejo.clarob.uk/rob/proton-drive-mount
+nix profile add "git+https://forgejo.clarob.uk/rob/proton-drive-mount?ref=refs/tags/stable"
 proton-drive-mount --version
 ```
 
@@ -29,7 +33,7 @@ A Nix older than the rename of `install` to `add` spells it `nix profile install
 Or as an input of your own flake, for NixOS or home-manager:
 
 ```nix
-inputs.proton-drive-mount.url = "git+https://forgejo.clarob.uk/rob/proton-drive-mount";
+inputs.proton-drive-mount.url = "git+https://forgejo.clarob.uk/rob/proton-drive-mount?ref=refs/tags/stable";
 
 # then, in your configuration:
 home.packages = [ inputs.proton-drive-mount.packages.${pkgs.stdenv.hostPlatform.system}.default ];
