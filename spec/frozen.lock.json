@@ -274,6 +274,14 @@
       "id": "the-serve-takes-the-log-level",
       "path": "spec/features/log-level.feature",
       "expected_status": "green"
+    },
+    {
+      "id": "writing-into-a-listed-folder-lists-it-no-more",
+      "path": "spec/features/listing-performance.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the last listing shows (\\d+) files, and the Drive listed \"([^\"]*)\" once and loaded (\\d+) nodes in all$"
+      ]
     }
   ]
 }

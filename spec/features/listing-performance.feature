@@ -28,3 +28,12 @@ Feature: Listing a large folder loads each node once
     And the serve restarts
     And the user lists "Photos/2024" again
     Then the last listing shows 5000 files, and the Drive loaded 5000 nodes in all
+
+  @id:writing-into-a-listed-folder-lists-it-no-more
+  Scenario: Writing photos into a large folder the serve has listed lists the folder no more
+    Given a Drive whose My files holds 5000 photos "Photos/2024/IMG_0001.jpg" to "Photos/2024/IMG_5000.jpg"
+    When the user lists "Photos/2024"
+    And the user writes "a new photo" to "Photos/2024/NEW_0001.jpg"
+    And the user writes "another new photo" to "Photos/2024/NEW_0002.jpg"
+    And the user lists "Photos/2024" again
+    Then the last listing shows 5002 files, and the Drive listed "Photos/2024" once and loaded 5000 nodes in all
