@@ -1,4 +1,4 @@
-// The steps about a large folder: a Drive of numbered photos, a serve that restarts, and the
+// The steps about a large folder: a Drive of numbered photos, a serve that restarts or is killed, and the
 // Thens that count what the Drive loaded across every listing and read the user made.
 // "Loaded N nodes" counts the arranged photos' nodes only, summed over the user's actions, so it
 // holds across a restart, which starts the Receive arm's counts again from zero.
@@ -86,6 +86,16 @@ Given(
 
 When(/^the serve restarts$/, async function (this: DriveWorld) {
   await this.restartServe();
+});
+
+When(/^a minute passes$/, async function (this: DriveWorld) {
+  await this.pass(60);
+});
+
+// SIGKILL, as a crash, an out-of-memory kill or a power loss ends it: the serve saves nothing at the end.
+When(/^the serve is killed and starts again$/, async function (this: DriveWorld) {
+  await this.killServe();
+  await this.ensureServing();
 });
 
 // --- the Thens -----------------------------------------------------------------------------

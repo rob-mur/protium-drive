@@ -37,3 +37,12 @@ Feature: Listing a large folder loads each node once
     And the user writes "another new photo" to "Photos/2024/NEW_0002.jpg"
     And the user lists "Photos/2024" again
     Then the last listing shows 5002 files, and the Drive listed "Photos/2024" once and loaded 5000 nodes in all
+
+  @id:a-killed-serve-lists-a-large-folder-without-loading-its-nodes
+  Scenario: A serve that was killed lists a large folder it listed a minute before without loading its nodes
+    Given a Drive whose My files holds 5000 photos "Photos/2024/IMG_0001.jpg" to "Photos/2024/IMG_5000.jpg"
+    When the user lists "Photos/2024"
+    And a minute passes
+    And the serve is killed and starts again
+    And the user lists "Photos/2024" again
+    Then the last listing shows 5000 files, and the Drive loaded 5000 nodes in all
