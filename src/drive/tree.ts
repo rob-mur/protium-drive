@@ -53,6 +53,7 @@ export class DriveTree {
     private myFilesRoot?: Entry;
     private pendingRestore?: ListingSnapshot;
     private restoredFrom?: string;
+    private loads = 0;
 
     constructor(
         private readonly sdk: DriveSdk,
@@ -69,6 +70,11 @@ export class DriveTree {
      */
     get restoredEventId(): string | undefined {
         return this.restoredFrom;
+    }
+
+    /** How many listings loaded from Drive so far; a restored one does not count. */
+    get listingsLoaded(): number {
+        return this.loads;
     }
 
     /**
@@ -313,7 +319,10 @@ export class DriveTree {
         const pending = this.loadListing(folderUid);
         this.listings.set(folderUid, pending);
         pending.then(
-            (listing) => this.loaded.set(pending, listing),
+            (listing) => {
+                this.loaded.set(pending, listing);
+                this.loads++;
+            },
             () => {
                 if (this.listings.get(folderUid) === pending) {
                     this.listings.delete(folderUid);

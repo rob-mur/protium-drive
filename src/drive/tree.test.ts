@@ -1075,6 +1075,18 @@ describe('DriveTree snapshot and restore', () => {
         expect([...tree.snapshot()!.listings.keys()].sort()).toEqual(['docs', 'root']);
     });
 
+    test('counts the listings it loaded from Drive, so a periodic save can tell nothing new loaded', async () => {
+        const tree = new DriveTree(fakeSdk(fixture()) as never, QUIET);
+        expect(tree.listingsLoaded).toBe(0);
+        await tree.stat(['Photos', 'immich']);
+        expect(tree.listingsLoaded).toBe(2);
+        await tree.stat(['Photos', 'immich']);
+        expect(tree.listingsLoaded).toBe(2);
+        tree.dropListings(['photos']);
+        await tree.stat(['Photos', 'immich']);
+        expect(tree.listingsLoaded).toBe(3);
+    });
+
     test('a restored tree answers from the snapshot without listing Drive, and keeps its event id', async () => {
         const sdk = fakeSdk(fixture());
         const tree = new DriveTree(sdk as never, QUIET, undefined, { restore: await saved() });

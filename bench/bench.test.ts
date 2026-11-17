@@ -37,3 +37,11 @@ test('the bench script prints the report', async () => {
     expect(await run.exited).toBe(0);
     expect(out).toContain('## Listing');
 }, 120_000);
+
+test('the tree bench lists a nested tree cold, saves it, and lists it warm from the saved file without Drive calls', async () => {
+    const report = await runBench(parseArgs(['--skip', 'crypto', '--skip', 'listing', '--tree-files', '30', '--tree-years', '2', '--rtt', '1', '--distinct', '1']));
+    expect(report).toContain('## Tree');
+    // 2 years of 12 months, plus My files, Photos, immich and the 2 year folders.
+    expect(report).toMatch(/\| 30 \| 29 \|/);
+    expect(report).toMatch(/\| warm \|[^\n]*\| 0 \| 0 \|/);
+}, 120_000);

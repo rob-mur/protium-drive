@@ -5,6 +5,7 @@ import { stopCryptoWorker } from '../src/proton/crypto-pool';
 import { benchCrypto, type CryptoRow } from './crypto';
 import { benchListing, type ListingRow } from './listing';
 import { fixed, table } from './stats';
+import { benchTree, type TreeRow } from './tree';
 
 export type BenchOptions = {
     sizes: number[];
@@ -13,6 +14,10 @@ export type BenchOptions = {
     roundTripMs: number;
     uidPage: number;
     distinctKeys: number;
+    /** Photos in the immich-shaped tree; 0 skips the tree bench. */
+    treeFiles: number;
+    treeYears: number;
+    treeConcurrency: number;
     skip: Set<'crypto' | 'listing'>;
 };
 
@@ -23,12 +28,18 @@ export const DEFAULTS: BenchOptions = {
     roundTripMs: 100,
     uidPage: 150,
     distinctKeys: 16,
+    treeFiles: 0,
+    treeYears: 10,
+    treeConcurrency: 8,
     skip: new Set(),
 };
 
 const numbers = (value: string) => value.split(',').map(Number);
 
-/** Reads `--sizes 30,300 --argon2 0,1 --rtt 100 --uid-page 150 --distinct 16 --skip crypto|listing`. */
+/**
+ * Reads `--sizes 30,300 --argon2 0,1 --rtt 100 --uid-page 150 --distinct 16 --skip crypto|listing`,
+ * and `--tree-files 20400 --tree-years 10 --tree-concurrency 8` for the immich-shaped tree.
+ */
 export function parseArgs(argv: string[]): BenchOptions {
     const options: BenchOptions = { ...DEFAULTS, skip: new Set() };
     for (let i = 0; i < argv.length; i += 2) {
@@ -51,6 +62,15 @@ export function parseArgs(argv: string[]): BenchOptions {
                 break;
             case '--distinct':
                 options.distinctKeys = Number(value);
+                break;
+            case '--tree-files':
+                options.treeFiles = Number(value);
+                break;
+            case '--tree-years':
+                options.treeYears = Number(value);
+                break;
+            case '--tree-concurrency':
+                options.treeConcurrency = Number(value);
                 break;
             case '--skip':
                 options.skip.add(value as 'crypto' | 'listing');
@@ -112,6 +132,22 @@ export function listingReport(rows: ListingRow[]): string {
     );
 }
 
+export function treeReport(rows: TreeRow[]): string {
+    return table(
+        ['files', 'folders', 'run', 'walk s', 'Drive listings', 'Drive node loads', 'cache file', 'cache file MiB'],
+        rows.map((r) => [
+            String(r.files),
+            String(r.folders),
+            r.run,
+            (r.walkMs / 1000).toFixed(2),
+            String(r.driveListings),
+            String(r.driveNodeLoads),
+            `${r.run === 'cold' ? 'write' : 'read'} ${fixed(r.cacheMs)} ms`,
+            (r.cacheBytes / 2 ** 20).toFixed(1),
+        ]),
+    );
+}
+
 /** Runs the benchmark and returns its Markdown report. It measures and never judges: no time fails it. */
 export async function runBench(options: BenchOptions, log: (text: string) => void = () => {}): Promise<string> {
     const parts = [`## Machine\n\n\`\`\`\n${machine()}\n\`\`\``];
@@ -125,6 +161,14 @@ export async function runBench(options: BenchOptions, log: (text: string) => voi
             const { roundTripMs, uidPage, distinctKeys } = options;
             const rows = await benchListing(options.listingSizes, options.argon2Fractions, { roundTripMs, uidPage, distinctKeys });
             parts.push(`## Listing: simulated round trip ${roundTripMs} ms, ${uidPage} UIDs per page, ${30} nodes per batch\n\n${listingReport(rows)}`);
+        }
+        if (options.treeFiles > 0) {
+            log('tree...');
+            const { roundTripMs, uidPage, distinctKeys, treeFiles: files, treeYears: years, treeConcurrency: concurrency } = options;
+            const rows = await benchTree({ roundTripMs, uidPage, distinctKeys, files, years, concurrency });
+            parts.push(
+                `## Tree: an immich library of ${files} photos in ${years} years of month folders, walked ${concurrency} folders at a time; simulated round trip ${roundTripMs} ms, v4 node keys\n\n${treeReport(rows)}`,
+            );
         }
     } finally {
         await stopCryptoWorker();

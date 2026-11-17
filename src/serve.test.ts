@@ -6,7 +6,7 @@ import { rm as rmAsync } from 'node:fs/promises';
 import { afterEach, describe, expect, test } from 'bun:test';
 
 import { authLogin } from './auth/login.ts';
-import { LISTING_CACHE_FILE_NAME, ListingCacheFile } from './drive/listing-cache.ts';
+import { LISTING_CACHE_FILE_NAME, ListingCacheFile, type ListingSnapshot } from './drive/listing-cache.ts';
 import { createLogger } from './logger.ts';
 import { saveListings, serveCommand, NOT_SIGNED_IN, LOOPBACK_WARNING, NEEDS_LOGIN, REFUSED_SESSION } from './serve.ts';
 import { SessionFileStore } from './session/store.ts';
@@ -467,6 +467,29 @@ describe('serveCommand listing cache', () => {
         expect(statSync(file).mode & 0o777).toBe(0o600);
         const saved = await new ListingCacheFile(stateDir).read();
         const listed = [...saved!.listings.values()].flat().map((entry) => entry.name).sort();
+        expect(listed).toEqual(['Photos', 'beach.jpg']);
+    });
+
+    test('a running serve saves the listings it loaded within a minute, before any stop', async () => {
+        const stateDir = scratch('state');
+        const driveDir = scratch('drive');
+        await seedDrive(driveDir, [{ path: '/Photos/beach.jpg', type: 'file', contentBase64: btoa('sand') }]);
+        await signIn(stateDir, driveDir);
+        const controlSeen = captureControlUrl();
+        let savedWhileRunning: ListingSnapshot | undefined;
+        await serveOnce(stateDir, driveDir, async (url) => {
+            const control = await controlSeen;
+            await names(url, 'Photos/');
+            expect(existsSync(join(stateDir, LISTING_CACHE_FILE_NAME))).toBe(false);
+            await fetch(new URL('clock/advance', control), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ seconds: 60 }),
+            });
+            savedWhileRunning = await new ListingCacheFile(stateDir).read();
+        });
+
+        const listed = [...savedWhileRunning!.listings.values()].flat().map((entry) => entry.name).sort();
         expect(listed).toEqual(['Photos', 'beach.jpg']);
     });
 

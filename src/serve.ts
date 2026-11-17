@@ -3,6 +3,7 @@ import type { Logger } from '../vendor/proton-drive-sdk-account';
 import { EventWatcher } from './drive/events';
 import { Backoff } from './drive/backoff';
 import { ListingCacheFile } from './drive/listing-cache';
+import { ListingSaver } from './drive/listing-saver';
 import { DriveTree } from './drive/tree';
 import { acquireStateLock } from './session/lock';
 import type { FileCredentials } from './session/credentials';
@@ -99,6 +100,14 @@ export async function serveCommand(options: ServeOptions): Promise<number> {
                 clearTimeout: connection.clock?.clearTimeout.bind(connection.clock),
             });
             await watcher.start();
+            const saver = new ListingSaver({
+                state: () => (tree.snapshot() && watcher.lastEventId !== undefined ? `${tree.listingsLoaded}:${watcher.lastEventId}` : undefined),
+                save: () => writeListings(cacheFile, tree, watcher),
+                onError: (error) => logger.warn(couldNotSave(cacheFile, error)),
+                setTimeout: connection.clock?.setTimeout.bind(connection.clock),
+                clearTimeout: connection.clock?.clearTimeout.bind(connection.clock),
+            });
+            saver.start();
             logger.info(`Serving Proton Drive ${options.root ? `folder /${options.root}` : 'My files'} at ${server.url.href}`);
             options.onListening?.(server.url);
             const ended = await Promise.race([waitUntil(signal).then(() => 'signal' as const), refused]);
@@ -107,6 +116,7 @@ export async function serveCommand(options: ServeOptions): Promise<number> {
             }
             logger.info('Stopping');
             watcher.stop();
+            await saver.stop();
             // On a refusal, let the request that met it finish with its 401.
             await stop(server, ended === 'refused');
             await saveListings(cacheFile, tree, watcher, logger);
@@ -125,16 +135,25 @@ export async function serveCommand(options: ServeOptions): Promise<number> {
  * event read yet there is nothing to replay from, and nothing is saved.
  */
 export async function saveListings(cacheFile: ListingCacheFile, tree: DriveTree, watcher: EventWatcher, logger: Logger): Promise<void> {
+    try {
+        await writeListings(cacheFile, tree, watcher);
+    } catch (error) {
+        logger.warn(couldNotSave(cacheFile, error));
+    }
+}
+
+/** As `saveListings`, but throws when the file cannot be written. */
+async function writeListings(cacheFile: ListingCacheFile, tree: DriveTree, watcher: EventWatcher): Promise<void> {
     const snapshot = tree.snapshot();
     const lastEventId = watcher.lastEventId;
     if (!snapshot || lastEventId === undefined) {
         return;
     }
-    try {
-        await cacheFile.write({ ...snapshot, lastEventId });
-    } catch (error) {
-        logger.warn(`Could not save the listings to ${cacheFile.filePath}: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    await cacheFile.write({ ...snapshot, lastEventId });
+}
+
+function couldNotSave(cacheFile: ListingCacheFile, error: unknown): string {
+    return `Could not save the listings to ${cacheFile.filePath}: ${error instanceof Error ? error.message : String(error)}`;
 }
 
 /** Closes the listener even when stopping is interrupted, so the port frees. */
