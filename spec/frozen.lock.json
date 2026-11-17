@@ -44,10 +44,7 @@
     {
       "id": "an-upload-that-moves-no-bytes-reaches-the-user-as-a-gateway-timeout",
       "path": "spec/features/error-mapping.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the first write fails as a gateway timeout, and the second one succeeds$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-slow-upload-that-still-moves-bytes-is-not-aborted",
