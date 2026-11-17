@@ -290,9 +290,18 @@ export class DriveTree {
             const result = await controller.completion();
             return await this.sdk.getNode(result.nodeUid);
         });
-        // The listing holds the old entry (or none); drop it so the next ask reloads the folder.
-        this.listings.delete(parent.uid);
-        return { entry: toEntry(node as NodeEntity) as Entry, created: !existing };
+        const entry = toEntry(node as NodeEntity) as Entry;
+        // A loaded listing takes the new entry in place, so a run of uploads into one
+        // folder does not list it again after each. A listing still loading may have
+        // read the folder before the file was there; drop it so the next ask loads anew.
+        const pending = this.listings.get(parent.uid);
+        const listing = pending && this.loaded.get(pending);
+        if (listing) {
+            listing.set(entry.name, entry);
+        } else {
+            this.listings.delete(parent.uid);
+        }
+        return { entry, created: !existing };
     }
 
     /** The folder's cached listing, loading it from the SDK on the first ask. */

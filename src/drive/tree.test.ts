@@ -446,6 +446,60 @@ describe('DriveTree upload', () => {
         await tree.upload(['Photos'], 'beach.jpg', body(), { size: 12, mediaType: 'image/jpeg' });
         expect((await tree.stat(['Photos', 'beach.jpg']))?.uid).toBe('new-beach.jpg');
     });
+
+    test('an upload into a listed folder adds the file to the listing, and the folder is not listed again', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+            ['beach', file('beach', 'beach.jpg', 'photos')],
+        ]);
+        const sdk = fakeUploadSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+        await tree.list((await tree.stat(['Photos']))!);
+        const listed = sdk.calls.get('iterateFolderChildrenNodeUids');
+        await tree.upload(['Photos'], 'snow.jpg', body(), { size: 12, mediaType: 'image/jpeg' });
+        await tree.upload(['Photos'], 'beach.jpg', body(), { size: 12, mediaType: 'image/jpeg' });
+        expect((await tree.stat(['Photos', 'snow.jpg']))?.uid).toBe('new-snow.jpg');
+        expect((await tree.list((await tree.stat(['Photos']))!)).map((entry) => entry.name).sort()).toEqual(['beach.jpg', 'snow.jpg']);
+        expect(sdk.calls.get('iterateFolderChildrenNodeUids')).toBe(listed);
+    });
+
+    test('a listing that started loading while an upload was on its way is dropped, so the next ask lists the folder again', async () => {
+        const nodes = new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+        ]);
+        const sdk = fakeUploadSdk(nodes);
+        const tree = new DriveTree(sdk as never, QUIET);
+        const photos = (await tree.stat(['Photos']))!;
+        await tree.list(photos);
+        let uploaded!: () => void;
+        const uploadGate = new Promise<void>((resolve) => (uploaded = resolve));
+        const getFileUploader = sdk.getFileUploader;
+        sdk.getFileUploader = (async (...args: Parameters<typeof getFileUploader>) => {
+            await uploadGate;
+            return getFileUploader(...args);
+        }) as never;
+        let listed!: () => void;
+        const listGate = new Promise<void>((resolve) => (listed = resolve));
+        const iterate = sdk.iterateFolderChildrenNodeUids;
+        sdk.iterateFolderChildrenNodeUids = async function* (parent: NodeOrUid) {
+            await listGate;
+            yield* iterate(parent);
+        } as never;
+        const upload = tree.upload(['Photos'], 'snow.jpg', body(), { size: 12, mediaType: 'image/jpeg' });
+        await Bun.sleep(0);
+        // An event drops the listing while the upload is on its way, and a client asks again.
+        tree.dropListings(['photos']);
+        const loading = tree.list(photos);
+        uploaded();
+        await upload;
+        listed();
+        await loading;
+        const before = sdk.calls.get('iterateFolderChildrenNodeUids') ?? 0;
+        expect((await tree.stat(['Photos', 'snow.jpg']))?.uid).toBe('new-snow.jpg');
+        expect(sdk.calls.get('iterateFolderChildrenNodeUids')).toBe(before + 1);
+    });
 });
 
 describe('DriveTree listing cache', () => {
