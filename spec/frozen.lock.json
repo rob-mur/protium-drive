@@ -52,10 +52,7 @@
     {
       "id": "a-slow-upload-that-still-moves-bytes-is-not-aborted",
       "path": "spec/features/error-mapping.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^within (\\d+) seconds the Drive holds \"([^\"]*)\" containing \"([^\"]*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "binary-reports-its-revision",
