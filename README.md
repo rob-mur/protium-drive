@@ -141,6 +141,66 @@ unmounts the folder, and `mount` exits 0.
 The unit must be able to find `fusermount3` on its `PATH`. On NixOS, the user manager's `PATH`
 has `/run/wrappers/bin`. If it does not on your system, add an `Environment=PATH=...` line.
 
+## Switch from another mount
+
+A mount from another backend, such as rclone's `protondrive` backend, keeps each write in its
+own cache until it uploads it. proton-drive-mount cannot take over that cache. If you stop the
+old mount while it still has files to upload and then start proton-drive-mount, those files do
+not reach the Drive. Empty the old mount's upload queue first.
+
+Before you start, install proton-drive-mount and run `auth login` with the same Proton account,
+as the user that will run the mount. The examples below use an old mount of the rclone remote
+`proton:` at `/mnt/proton`. Use your own names.
+
+1. Stop every program that writes to the mount. Keep the old mount running.
+2. Wait until the old mount has uploaded all its files. If it runs with rclone's remote control
+   (`--rc`), ask it:
+
+   ```sh
+   rclone rc vfs/stats
+   ```
+
+   Wait until `diskCache` shows `"uploadsQueued": 0` and `"uploadsInProgress": 0`. A file waits
+   in the queue for `--vfs-write-back` after it closes, so this can take a few seconds. If
+   `"erroredFiles"` is not 0, a file did not upload: read the old mount's log and fix that first.
+   If the remote control serves more than one mount, add `fs=proton:` (`rclone rc vfs/list`
+   names them).
+3. Stop the old mount: stop its service, or its rclone process. Disable the service, so that it
+   does not start again on the same folder.
+4. Look in the old mount's cache for files not yet uploaded. This check also works when the old
+   mount ran without `--rc`. rclone keeps a record of each cached file under `vfsMeta` in its
+   cache folder (its `--cache-dir`, by default `~/.cache/rclone` of the user that ran it), and
+   marks a file that is not yet uploaded `"Dirty": true`:
+
+   ```sh
+   grep -rlE '"Dirty": *true' ~/.cache/rclone/vfsMeta/proton
+   ```
+
+   No output means that no write waits. If it names a file, do not start proton-drive-mount:
+   start the old mount again and go back to step 2.
+5. Start proton-drive-mount on the same folder, for example with the user service above:
+   `proton-drive-mount mount /mnt/proton`.
+
+When the switch works, you can remove the old cache (`~/.cache/rclone/vfs/proton` and
+`~/.cache/rclone/vfsMeta/proton`) to free its disk space.
+
+What `mount` checks itself when it starts:
+
+- The mountpoint must be an empty folder. It refuses (exit 2) a folder that is not empty, so it
+  refuses a folder where the old mount still runs and shows your files.
+- If a killed mount left the folder mounted ("Transport endpoint is not connected"), it unmounts
+  the folder with `fusermount3 -u -z` and continues. The killed mount's cache stays on disk.
+- It uploads the writes an earlier proton-drive-mount mount left, when the cache folder,
+  `--state-dir` and `--root` are the same.
+
+What you must check, because `mount` does not:
+
+- That the old mount's cache has no file not yet uploaded (steps 2 and 4). `mount` does not read,
+  upload or remove another backend's cache, also when it is in the same `--cache-dir`, and it does
+  not tell you that such a cache exists.
+- That no program writes to the folder while you switch (step 1).
+- That the old mount does not run anywhere else with the same remote, such as on another folder.
+
 ## Sign in again
 
 When Proton refuses the saved session, at the start or while it runs, `mount` and `serve` exit
