@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { NodeType, type MaybeMissingNode, type NodeEntity, type NodeOrUid, RateLimitedError } from '@protontech/drive-sdk';
+import { AbortError, NodeType, type MaybeMissingNode, type NodeEntity, type NodeOrUid, RateLimitedError } from '@protontech/drive-sdk';
 
 import { Backoff } from './backoff.ts';
-import { DriveTree } from './tree.ts';
+import { DriveTree, UPLOAD_STALL_MS } from './tree.ts';
 import type { ListingSnapshot } from './listing-cache.ts';
 import type { DriveSdk } from './sdk.ts';
 
@@ -499,6 +499,140 @@ describe('DriveTree upload', () => {
         const before = sdk.calls.get('iterateFolderChildrenNodeUids') ?? 0;
         expect((await tree.stat(['Photos', 'snow.jpg']))?.uid).toBe('new-snow.jpg');
         expect(sdk.calls.get('iterateFolderChildrenNodeUids')).toBe(before + 1);
+    });
+});
+
+describe('DriveTree upload that moves no bytes', () => {
+    const nodes = () =>
+        new Map([
+            ['root', folder('root', 'My files')],
+            ['photos', folder('photos', 'Photos', 'root')],
+        ]);
+    const body = () => new ReadableStream<Uint8Array>({ start: (controller) => controller.close() });
+
+    /** Timers that fire only when a test fires them. */
+    function manualTimers() {
+        const pending = new Map<number, { callback: () => unknown; ms: number }>();
+        let next = 0;
+        return {
+            pending,
+            setTimeout: (callback: () => unknown, ms: number) => {
+                pending.set(++next, { callback, ms });
+                return next;
+            },
+            clearTimeout: (handle: never) => void pending.delete(handle as number),
+            /** Fires the one pending timer. */
+            fire() {
+                expect(pending.size).toBe(1);
+                const [handle, timer] = [...pending][0]!;
+                pending.delete(handle);
+                timer.callback();
+            },
+        };
+    }
+
+    /**
+     * An SDK whose upload reports progress when the test calls `progress`, and finishes when it
+     * calls `finish`. It fails with AbortError once the signal it was given aborts, unless
+     * `ignoresAbort`, when it never ends on its own.
+     */
+    function stallingSdk(ignoresAbort = false) {
+        const base = fakeSdk(nodes());
+        const made = file('new-beach.jpg', 'beach.jpg', 'photos');
+        const state = {
+            signal: undefined as AbortSignal | undefined,
+            progress: (_bytes: number) => {},
+            finish: () => {},
+            started: false,
+        };
+        const uploader = (signal?: AbortSignal) => {
+            state.signal = signal;
+            return {
+                uploadFromStream: async (_stream: ReadableStream, _thumbnails: unknown, onProgress?: (bytes: number) => void) => {
+                    state.started = true;
+                    state.progress = (bytes) => onProgress?.(bytes);
+                    const done = new Promise<{ nodeUid: string; nodeRevisionUid: string }>((resolve, reject) => {
+                        state.finish = () => resolve({ nodeUid: made.uid, nodeRevisionUid: 'rev' });
+                        if (!ignoresAbort) {
+                            signal?.addEventListener('abort', () => reject(new AbortError('upload aborted')), { once: true });
+                        }
+                    });
+                    done.catch(() => {});
+                    return { pause() {}, resume() {}, completion: () => done };
+                },
+            };
+        };
+        const sdk = {
+            ...base,
+            getFileUploader: async (_parent: NodeOrUid, _name: string, _metadata: unknown, signal?: AbortSignal) => uploader(signal),
+            getNode: async () => made,
+        } as unknown as DriveSdk;
+        return { sdk, state };
+    }
+
+    /** Waits until the upload has started, as the SDK sees it. */
+    async function started(state: { started: boolean }) {
+        for (let i = 0; i < 100 && !state.started; i++) await Promise.resolve();
+        expect(state.started).toBe(true);
+    }
+
+    test('waits five minutes', () => {
+        expect(UPLOAD_STALL_MS).toBe(5 * 60 * 1000);
+    });
+
+    test('an upload that moves no bytes for the stall time is aborted, and fails as a gateway timeout', async () => {
+        const timers = manualTimers();
+        const { sdk, state } = stallingSdk();
+        const tree = new DriveTree(sdk, QUIET, new Backoff(), timers);
+        const upload = tree.upload(['Photos'], 'beach.jpg', body(), { mediaType: 'image/jpeg' });
+        await started(state);
+        expect([...timers.pending.values()].map((timer) => timer.ms)).toEqual([UPLOAD_STALL_MS]);
+        timers.fire();
+        expect(state.signal?.aborted).toBe(true);
+        await expect(upload).rejects.toMatchObject({ name: 'DriveError', status: 504 });
+        expect(timers.pending.size).toBe(0);
+    });
+
+    test('an upload whose SDK ignores the abort still fails at once', async () => {
+        const timers = manualTimers();
+        const { sdk, state } = stallingSdk(true);
+        const tree = new DriveTree(sdk, QUIET, new Backoff(), timers);
+        const upload = tree.upload(['Photos'], 'beach.jpg', body(), { mediaType: 'image/jpeg' });
+        await started(state);
+        timers.fire();
+        await expect(upload).rejects.toMatchObject({ name: 'DriveError', status: 504 });
+    });
+
+    test('each report of progress starts the stall time again, and a finished upload leaves no timer', async () => {
+        const timers = manualTimers();
+        const { sdk, state } = stallingSdk();
+        const tree = new DriveTree(sdk, QUIET, new Backoff(), timers);
+        const upload = tree.upload(['Photos'], 'beach.jpg', body(), { mediaType: 'image/jpeg' });
+        await started(state);
+        const first = [...timers.pending.keys()];
+        state.progress(4 * 1024 * 1024);
+        const second = [...timers.pending.keys()];
+        expect(second).toHaveLength(1);
+        expect(second).not.toEqual(first);
+        expect(timers.pending.get(second[0]!)?.ms).toBe(UPLOAD_STALL_MS);
+        state.finish();
+        const { entry } = await upload;
+        expect(entry.name).toBe('beach.jpg');
+        expect(state.signal?.aborted).toBe(false);
+        expect(timers.pending.size).toBe(0);
+    });
+
+    test('a client that goes away aborts the upload as before, not as a gateway timeout', async () => {
+        const timers = manualTimers();
+        const { sdk, state } = stallingSdk();
+        const tree = new DriveTree(sdk, QUIET, new Backoff(), timers);
+        const client = new AbortController();
+        const upload = tree.upload(['Photos'], 'beach.jpg', body(), { mediaType: 'image/jpeg' }, client.signal);
+        await started(state);
+        client.abort();
+        expect(state.signal?.aborted).toBe(true);
+        await expect(upload).rejects.toBeInstanceOf(AbortError);
+        expect(timers.pending.size).toBe(0);
     });
 });
 

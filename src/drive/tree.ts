@@ -34,7 +34,17 @@ export type DriveTreeOptions = {
      * its event scope; otherwise they are ignored.
      */
     restore?: ListingSnapshot;
+    /** The timer that aborts a stalled upload; the fake drive's clock under `--fake-drive`. */
+    setTimeout?: (callback: () => unknown, ms: number) => unknown;
+    clearTimeout?: (handle: never) => void;
 };
+
+/**
+ * How long an upload may move no bytes before it is aborted. The PUT then answers 504, which
+ * rclone retries, instead of hanging until rclone's own one-hour timeout. The SDK reports
+ * progress once per 4 MiB block, so this outlasts one block on a link of 15 KiB/s.
+ */
+export const UPLOAD_STALL_MS = 5 * 60 * 1000;
 
 /**
  * Proton Drive as a tree of paths, on top of the SDK's node UIDs.
@@ -289,12 +299,28 @@ export class DriveTree {
             ...(options.modified ? { modificationTime: options.modified } : {}),
         };
         const node = await this.backoff.run(async () => {
-            const uploader = existing
-                ? await this.sdk.getFileRevisionUploader(existing.uid, metadata, signal)
-                : await this.sdk.getFileUploader(parent.uid, name, metadata, signal);
-            const controller = await uploader.uploadFromStream(body, []);
-            const result = await controller.completion();
-            return await this.sdk.getNode(result.nodeUid);
+            const stall = this.stallWatch(`${name} moved no bytes for ${UPLOAD_STALL_MS / 1000}s, so its upload was aborted`);
+            const uploadSignal = signal ? AbortSignal.any([signal, stall.signal]) : stall.signal;
+            try {
+                const uploader = existing
+                    ? await this.sdk.getFileRevisionUploader(existing.uid, metadata, uploadSignal)
+                    : await this.sdk.getFileUploader(parent.uid, name, metadata, uploadSignal);
+                stall.restart();
+                // The race ends the PUT on a stall even if the SDK is slow to honour the abort.
+                const result = await Promise.race([
+                    (async () => {
+                        const controller = await uploader.uploadFromStream(body, [], () => stall.restart());
+                        return controller.completion();
+                    })(),
+                    stall.fired,
+                ]);
+                stall.stop();
+                return await this.sdk.getNode(result.nodeUid);
+            } catch (error: unknown) {
+                throw stall.signal.aborted ? stall.signal.reason : error;
+            } finally {
+                stall.stop();
+            }
         });
         const entry = toEntry(node as NodeEntity) as Entry;
         // A loaded listing takes the new entry in place, so a run of uploads into one
@@ -308,6 +334,43 @@ export class DriveTree {
             this.listings.delete(parent.uid);
         }
         return { entry, created: !existing };
+    }
+
+    /**
+     * A timer that aborts `signal` with a 504 `DriveError` once `UPLOAD_STALL_MS` passes after the
+     * last `restart()`; `fired` rejects with the same error. It does nothing until the first
+     * `restart()`, and nothing after `stop()`.
+     */
+    private stallWatch(message: string) {
+        const setTimer = this.options.setTimeout ?? ((callback, ms) => setTimeout(callback, ms));
+        const clearTimer = this.options.clearTimeout ?? clearTimeout;
+        const controller = new AbortController();
+        let handle: unknown;
+        let stopped = false;
+        let fail!: (error: DriveError) => void;
+        const fired = new Promise<never>((_resolve, reject) => (fail = reject));
+        fired.catch(() => {});
+        const stop = () => {
+            stopped = true;
+            if (handle !== undefined) clearTimer(handle as never);
+            handle = undefined;
+        };
+        return {
+            signal: controller.signal,
+            fired,
+            stop,
+            restart: () => {
+                if (stopped) return;
+                if (handle !== undefined) clearTimer(handle as never);
+                handle = setTimer(() => {
+                    handle = undefined;
+                    const error = new DriveError(504, message);
+                    stop();
+                    controller.abort(error);
+                    fail(error);
+                }, UPLOAD_STALL_MS);
+            },
+        };
     }
 
     /** The folder's cached listing, loading it from the SDK on the first ask. */

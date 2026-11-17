@@ -80,6 +80,8 @@ export async function serveCommand(options: ServeOptions): Promise<number> {
             const tree = new DriveTree(sdk, logger, new Backoff(connection.clock?.now.bind(connection.clock)), {
                 rootPath: options.root ? parsePath(options.root) : undefined,
                 restore: await cacheFile.read(),
+                setTimeout: connection.clock?.setTimeout.bind(connection.clock),
+                clearTimeout: connection.clock?.clearTimeout.bind(connection.clock),
             });
             const server = startServer({
                 host,
