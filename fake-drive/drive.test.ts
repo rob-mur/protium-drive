@@ -597,7 +597,7 @@ describe('call counts', () => {
         const folder = await client.createFolder(root, 'Docs');
         const uid = await upload(folder.uid, 'a.txt', 'a');
         expect(client.calls()).toEqual({
-            methods: { getMyFilesRootFolder: 1, createFolder: 1, getFileUploader: 1 },
+            methods: { getMyFilesRootFolder: 1, createFolder: 1, getFileUploader: 1, uploadFromStream: 1 },
             listings: {},
             nodeLoads: {},
             downloads: {},
@@ -634,6 +634,7 @@ describe('call counts', () => {
             renameNode: 1,
             moveNodes: 1,
             trashNodes: 1,
+            uploadFromStream: 2,
             getEventScheduler: 1,
             iterateEvents: 1,
         });

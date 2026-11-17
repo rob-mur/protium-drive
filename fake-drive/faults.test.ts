@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+    AbortError,
     ConnectionError,
     IntegrityError,
     NodeWithSameNameExistsValidationError,
@@ -11,6 +12,7 @@ import {
     ServerError,
 } from '@protontech/drive-sdk';
 
+import { FakeClock } from './clock.ts';
 import { FakeDrive, FakeDriveClient, NAME_TAKEN, SCOPE_ID } from './drive.ts';
 import { type Fault, FaultError, Faults } from './faults.ts';
 
@@ -312,6 +314,101 @@ describe('an upload that fails part-way', () => {
     });
 });
 
+describe('an upload that stops moving bytes', () => {
+    test('reads part of the content, reports no progress, and fails with AbortError once its signal aborts', async () => {
+        drive.add('Photos', { type: 'folder' });
+        faults.add({ kind: 'upload-stall', operation: 'getFileUploader', path: 'Photos' });
+        const abort = new AbortController();
+        let cancelled = false;
+        const stream = new ReadableStream<Uint8Array>({
+            pull: (controller) => controller.enqueue(new Uint8Array(1024)),
+            cancel() {
+                cancelled = true;
+            },
+        }, { highWaterMark: 0 });
+        const progress: number[] = [];
+        const uploader = await client.getFileUploader(drive.nodeAt('Photos').uid, 'beach.jpg', { mediaType: 'image/jpeg', expectedSize: 8 * 1024 }, abort.signal);
+        const controller = await uploader.uploadFromStream(stream, [], (bytes) => progress.push(bytes));
+        const outcome = controller.completion().then(() => 'done', (error: unknown) => error);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(await Promise.race([outcome, 'still running'])).toBe('still running');
+
+        abort.abort();
+        expect(await outcome).toBeInstanceOf(AbortError);
+        expect(progress).toEqual([]);
+        expect(cancelled).toBe(true);
+        expect(() => drive.nodeAt('Photos/beach.jpg')).toThrow();
+        await upload('Photos', 'beach.jpg', 'sand and sea');
+    });
+
+    test('on an overwrite, it leaves the file as it was', async () => {
+        drive.add('Photos/beach.jpg', { type: 'file', content: bytes('sand and sea') });
+        faults.add({ kind: 'upload-stall', operation: 'getFileRevisionUploader', path: 'Photos/beach.jpg' });
+        const abort = new AbortController();
+        const uploader = await client.getFileRevisionUploader(drive.nodeAt('Photos/beach.jpg').uid, { mediaType: 'text/plain', expectedSize: 13 }, abort.signal);
+        const controller = await uploader.uploadFromStream(new Blob(['sand and snow']).stream(), []);
+        abort.abort();
+        await expect(controller.completion()).rejects.toBeInstanceOf(AbortError);
+        expect(new TextDecoder().decode(drive.content('Photos/beach.jpg'))).toBe('sand and sea');
+    });
+});
+
+describe('an upload that moves slowly', () => {
+    test('reports one part of the content each minute of the clock, and commits after the tenth', async () => {
+        const clock = new FakeClock();
+        client = new FakeDriveClient(drive, { faults, clock });
+        drive.add('Photos', { type: 'folder' });
+        faults.add({ kind: 'upload-slow', operation: 'getFileUploader', path: 'Photos' });
+        const progress: number[] = [];
+        const uploader = await client.getFileUploader(drive.nodeAt('Photos').uid, 'beach.jpg', { mediaType: 'image/jpeg', expectedSize: 20 });
+        const controller = await uploader.uploadFromStream(new Blob(['0123456789abcdefghij']).stream(), [], (bytes) => progress.push(bytes));
+        const outcome = controller.completion();
+
+        await clock.advance(9 * 60_000);
+        expect(progress).toHaveLength(9);
+        expect(() => drive.nodeAt('Photos/beach.jpg')).toThrow();
+
+        await clock.advance(60_000);
+        expect(progress).toEqual(Array(10).fill(2));
+        await outcome;
+        expect(new TextDecoder().decode(drive.content('Photos/beach.jpg'))).toBe('0123456789abcdefghij');
+    });
+
+    test('fails with AbortError when its signal aborts, and commits nothing', async () => {
+        const clock = new FakeClock();
+        client = new FakeDriveClient(drive, { faults, clock });
+        drive.add('Photos', { type: 'folder' });
+        faults.add({ kind: 'upload-slow', operation: 'getFileUploader', path: 'Photos' });
+        const abort = new AbortController();
+        const uploader = await client.getFileUploader(drive.nodeAt('Photos').uid, 'beach.jpg', { mediaType: 'image/jpeg', expectedSize: 2 }, abort.signal);
+        const controller = await uploader.uploadFromStream(new Blob(['ab']).stream(), []);
+        await clock.advance(3 * 60_000);
+        abort.abort();
+        await expect(controller.completion()).rejects.toBeInstanceOf(AbortError);
+        await clock.advance(10 * 60_000);
+        expect(() => drive.nodeAt('Photos/beach.jpg')).toThrow();
+        expect(clock.pending()).toEqual([]);
+    });
+
+    test('cannot be set on a Receive arm without a clock', async () => {
+        drive.add('Photos', { type: 'folder' });
+        faults.add({ kind: 'upload-slow', operation: 'getFileUploader', path: 'Photos' });
+        await expect(upload('Photos', 'beach.jpg', 'ab')).rejects.toThrow('clock');
+    });
+});
+
+describe('every upload', () => {
+    test('is counted when it starts, and reports its bytes as progress', async () => {
+        drive.add('Photos', { type: 'folder' });
+        const progress: number[] = [];
+        const uploader = await client.getFileUploader(drive.nodeAt('Photos').uid, 'beach.jpg', { mediaType: 'image/jpeg', expectedSize: 12 });
+        const controller = await uploader.uploadFromStream(new Blob(['sand and sea']).stream(), [], (bytes) => progress.push(bytes));
+        expect(client.calls().methods.uploadFromStream).toBe(1);
+        await controller.completion();
+        expect(progress).toEqual([12]);
+    });
+});
+
 describe('setting a fault', () => {
     test('refuses an unknown kind or operation, and a kind on an operation it cannot occur on', () => {
         const bad: unknown[] = [
@@ -321,6 +418,8 @@ describe('setting a fault', () => {
             { kind: 'integrity', operation: 'iterateFolderChildrenNodeUids', path: 'a' },
             { kind: 'name-clash', operation: 'getFileRevisionUploader', path: 'a' },
             { kind: 'upload-part-way', operation: 'getFileDownloader', path: 'a' },
+            { kind: 'upload-stall', operation: 'getFileDownloader', path: 'a' },
+            { kind: 'upload-slow', operation: 'createFolder', path: 'a' },
             null,
         ];
         for (const fault of bad) expect(() => faults.add(fault as Fault)).toThrow(FaultError);

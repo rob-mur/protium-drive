@@ -20,12 +20,18 @@
  * - `name-clash` (`getFileUploader` only): `NodeWithSameNameExistsValidationError`.
  * - `upload-part-way` (`getFileUploader`, `getFileRevisionUploader`): the upload reads part of
  *   the content, then fails with `ConnectionError`. The Drive keeps no part of it.
+ * - `upload-stall` (`getFileUploader`, `getFileRevisionUploader`): the upload reads part of the
+ *   content, then moves no byte and reports no progress until its signal aborts, and fails with
+ *   `AbortError`. Without a signal it never ends. The Drive keeps no part of it.
+ * - `upload-slow` (`getFileUploader`, `getFileRevisionUploader`, under the clock only): the upload
+ *   reports a tenth of the content as progress at each minute of the clock, and commits after the
+ *   tenth minute. It fails with `AbortError` if its signal aborts first.
  */
-import { ConnectionError, IntegrityError, NodeWithSameNameExistsValidationError, RateLimitedError, ServerError } from '@protontech/drive-sdk';
+import { AbortError, ConnectionError, IntegrityError, NodeWithSameNameExistsValidationError, RateLimitedError, ServerError } from '@protontech/drive-sdk';
 
 import { NAME_TAKEN, type SdkSurface } from './drive.ts';
 
-export const FAULT_KINDS = ['rate-limited', 'server-error', 'unreachable', 'integrity', 'name-clash', 'upload-part-way'] as const;
+export const FAULT_KINDS = ['rate-limited', 'server-error', 'unreachable', 'integrity', 'name-clash', 'upload-part-way', 'upload-stall', 'upload-slow'] as const;
 export type FaultKind = (typeof FAULT_KINDS)[number];
 export type Operation = keyof SdkSurface;
 
@@ -57,6 +63,8 @@ const ONLY_ON: Partial<Record<FaultKind, readonly Operation[]>> = {
     integrity: ['getFileDownloader'],
     'name-clash': ['getFileUploader'],
     'upload-part-way': ['getFileUploader', 'getFileRevisionUploader'],
+    'upload-stall': ['getFileUploader', 'getFileRevisionUploader'],
+    'upload-slow': ['getFileUploader', 'getFileRevisionUploader'],
 };
 
 export class Faults {
@@ -95,6 +103,9 @@ export function faultError(kind: FaultKind): Error {
             return new NodeWithSameNameExistsValidationError('fake-drive: a node with this name already exists', NAME_TAKEN, undefined, false);
         case 'upload-part-way':
             return new ConnectionError('fake-drive: the upload failed part-way');
+        case 'upload-stall':
+        case 'upload-slow':
+            return new AbortError('fake-drive: upload aborted');
     }
 }
 

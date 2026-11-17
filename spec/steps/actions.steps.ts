@@ -38,6 +38,10 @@ When(/^the user reads "([^"]*)"$/, async function (this: DriveWorld, path: strin
   await this.read(path);
 });
 
+When(/^the user writes "([^"]*)" to "([^"]*)" while (\d+) minutes pass$/, async function (this: DriveWorld, content: string, path: string, minutes: string) {
+  await this.writeWhileTimePasses(path, content, Number(minutes) * 60);
+});
+
 When(/^the user writes "([^"]*)" to "([^"]*)"$/, async function (this: DriveWorld, content: string, path: string) {
   await this.write(path, content);
 });

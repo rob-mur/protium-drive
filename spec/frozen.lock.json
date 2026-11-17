@@ -42,6 +42,22 @@
       "expected_status": "green"
     },
     {
+      "id": "an-upload-that-moves-no-bytes-reaches-the-user-as-a-gateway-timeout",
+      "path": "spec/features/error-mapping.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the first write fails as a gateway timeout, and the second one succeeds$"
+      ]
+    },
+    {
+      "id": "a-slow-upload-that-still-moves-bytes-is-not-aborted",
+      "path": "spec/features/error-mapping.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^within (\\d+) seconds the Drive holds \"([^\"]*)\" containing \"([^\"]*)\"$"
+      ]
+    },
+    {
       "id": "binary-reports-its-revision",
       "path": "spec/features/identity.feature",
       "expected_status": "green"

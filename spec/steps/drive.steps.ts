@@ -56,6 +56,14 @@ Given(/^the file "([^"]*)" fails its integrity check$/, function (this: DriveWor
   fault(this, "integrity", "getFileDownloader", path);
 });
 
+Given(/^the next upload into "([^"]*)" stops moving bytes$/, function (this: DriveWorld, folder: string) {
+  fault(this, "upload-stall", "getFileUploader", folder);
+});
+
+Given(/^the next upload into "([^"]*)" moves a tenth of its bytes each minute$/, function (this: DriveWorld, folder: string) {
+  fault(this, "upload-slow", "getFileUploader", folder);
+});
+
 Given(/^the Drive refuses the next upload into "([^"]*)" because the name exists$/, function (this: DriveWorld, folder: string) {
   fault(this, "name-clash", "getFileUploader", folder);
 });

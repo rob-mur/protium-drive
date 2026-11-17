@@ -47,7 +47,7 @@ import {
 } from '@protontech/drive-sdk';
 
 import { type Clock, FakeClock, type TimerHandle } from './clock.ts';
-import { type Fault, faultError, type Faults, type Operation } from './faults.ts';
+import { type Fault, faultError, type FaultKind, type Faults, type Operation } from './faults.ts';
 import { armoredNodeKey, type NodeKeyKind, nodeKeyVersion } from './node-keys.ts';
 import { StateFile } from './state-file.ts';
 
@@ -149,7 +149,7 @@ export type AddSpec =
  * generator method counts when the product starts to iterate it, as the SDK sends its request then.
  */
 export type CallCounts = {
-    /** Per SDK method. */
+    /** Per SDK method, and `uploadFromStream` per upload started. */
     methods: Record<string, number>;
     /** `iterateFolderChildrenNodeUids`, per folder UID. */
     listings: Record<string, number>;
@@ -600,7 +600,7 @@ export class FakeDriveClient implements SdkSurface {
         const fault = await this.enter('getFileUploader', ...this.created(parentUid, name));
         validateName(name);
         this.drive.checkFreeName(parentUid, name);
-        return uploader(metadata, signal, (content) => this.drive.createFile(parentUid, name, content), fault);
+        return uploader(metadata, signal, (content) => this.drive.createFile(parentUid, name, content), this.upload(fault));
     }
 
     async getFileRevisionUploader(uid: NodeOrUid, metadata: UploadMetadata, signal?: AbortSignal): Promise<FileUploader> {
@@ -608,7 +608,7 @@ export class FakeDriveClient implements SdkSurface {
         const nodeUid = uidOf(uid);
         const fault = await this.enter('getFileRevisionUploader', this.drive.pathOfUid(nodeUid));
         this.requireRecord(nodeUid);
-        return uploader(metadata, signal, (content) => this.drive.createRevision(nodeUid, content), fault);
+        return uploader(metadata, signal, (content) => this.drive.createRevision(nodeUid, content), this.upload(fault));
     }
 
     async getFileDownloader(uid: NodeOrUid, signal?: AbortSignal): Promise<FileDownloader> {
@@ -693,13 +693,13 @@ export class FakeDriveClient implements SdkSurface {
 
     /**
      * What every call does after it is counted: it checks the account, then meets the first fault
-     * set for `operation` on one of `targets`. A fault that is an error is thrown here; an
-     * `integrity` or `upload-part-way` fault is returned for the call to act on.
+     * set for `operation` on one of `targets`. A fault that is an error is thrown here; a fault
+     * the call acts on (`integrity`, and the upload kinds) is returned.
      */
     private async enter(operation: Operation, ...targets: (string | undefined)[]): Promise<Fault | undefined> {
         await this.options.account?.authorize();
         const fault = this.options.faults?.take(operation, targets);
-        if (!fault || fault.kind === 'integrity' || fault.kind === 'upload-part-way') return fault;
+        if (!fault || ACTED_ON.has(fault.kind)) return fault;
         throw faultError(fault.kind);
     }
 
@@ -707,6 +707,11 @@ export class FakeDriveClient implements SdkSurface {
     private created(parentUid: string, name: string): (string | undefined)[] {
         const parent = this.drive.pathOfUid(parentUid);
         return [parent, parent === undefined ? undefined : parent ? `${parent}/${name}` : name];
+    }
+
+    /** What an upload needs besides its content: its fault, the clock, and how to count its start. */
+    private upload(fault: Fault | undefined): UploadSetting {
+        return { fault, clock: this.options.clock, started: () => this.count('uploadFromStream') };
     }
 
     private count(method: string, per?: Exclude<keyof CallCounts, 'methods'>, ...uids: string[]): void {
@@ -830,13 +835,25 @@ class FakeScheduler {
     }
 }
 
+/** The fault kinds a call acts on itself, rather than throwing their error when it is entered. */
+const ACTED_ON: ReadonlySet<FaultKind> = new Set(['integrity', 'upload-part-way', 'upload-stall', 'upload-slow']);
+
+/** How many parts an `upload-slow` fault reports, one each `SLOW_UPLOAD_STEP_MS` of the clock. */
+export const SLOW_UPLOAD_STEPS = 10;
+export const SLOW_UPLOAD_STEP_MS = 60_000;
+
+type UploadSetting = { fault?: Fault; clock?: Clock; started: () => void };
+
 function uploader(
     metadata: UploadMetadata,
     signal: AbortSignal | undefined,
     commit: (content: Content) => { nodeUid: string; nodeRevisionUid: string },
-    fault?: Fault,
+    { fault, clock, started }: UploadSetting,
 ): FileUploader {
-    const upload = async (stream: ReadableStream): Promise<UploadController> => {
+    const upload = async (stream: ReadableStream, onProgress?: (uploadedBytes: number) => void): Promise<UploadController> => {
+        started();
+        // The slow upload's clock starts with the upload, before it reads a byte.
+        const minutes = fault?.kind === 'upload-slow' ? slowly(clock, signal) : undefined;
         const done = (async () => {
             if (fault?.kind === 'upload-part-way') {
                 // Read the first part of the content, then fail before the Drive commits anything.
@@ -845,8 +862,25 @@ function uploader(
                 await reader.cancel();
                 throw faultError('upload-part-way');
             }
+            if (fault?.kind === 'upload-stall') {
+                // Read the first part of the content, then move no byte until the signal aborts.
+                const reader = stream.getReader();
+                await reader.read();
+                await untilAborted(signal);
+                await reader.cancel();
+                throw faultError('upload-stall');
+            }
             // A fake may buffer; the SDK encrypts block by block.
             const content = new Uint8Array(await new Response(stream).arrayBuffer());
+            if (minutes) {
+                const part = Math.ceil(content.length / SLOW_UPLOAD_STEPS);
+                for (let step = 0; step < SLOW_UPLOAD_STEPS; step++) {
+                    await minutes.next();
+                    onProgress?.(Math.min(part, content.length - step * part));
+                }
+            } else {
+                onProgress?.(content.length);
+            }
             if (signal?.aborted) throw new AbortError('fake-drive: upload aborted');
             if (metadata.expectedSize !== null && content.length !== metadata.expectedSize) {
                 throw new IntegrityError(`fake-drive: expected ${metadata.expectedSize} bytes, got ${content.length}`);
@@ -857,7 +891,52 @@ function uploader(
         done.catch(() => {});
         return { pause() {}, resume() {}, completion: () => done };
     };
-    return { uploadFromStream: upload, uploadFromFile: (file: File) => upload(file.stream()) };
+    return {
+        uploadFromStream: (stream, _thumbnails, onProgress) => upload(stream, onProgress),
+        uploadFromFile: (file, _thumbnails, onProgress) => upload(file.stream(), onProgress),
+    };
+}
+
+/**
+ * The minutes of a slow upload: `next()` resolves at each `SLOW_UPLOAD_STEP_MS` of the clock, from
+ * now, and rejects with `AbortError` once `signal` aborts. Each minute's timer is set when the last
+ * one fires, so a move of the clock fires them in turn.
+ */
+function slowly(clock: Clock | undefined, signal: AbortSignal | undefined): { next(): Promise<void> } {
+    if (!clock) {
+        const missing = Promise.reject(new Error('fake-drive: an upload-slow fault needs the clock'));
+        missing.catch(() => {});
+        return { next: () => missing };
+    }
+    const ticks: Promise<void>[] = [];
+    let handle: TimerHandle | undefined;
+    let tick!: () => void;
+    let fail!: (error: Error) => void;
+    const arm = (count: number) => {
+        if (count >= SLOW_UPLOAD_STEPS) return;
+        const ticked = new Promise<void>((resolve, reject) => ((tick = resolve), (fail = reject)));
+        ticked.catch(() => {});
+        ticks.push(ticked);
+        handle = clock.setTimeout(() => {
+            tick();
+            arm(count + 1);
+        }, SLOW_UPLOAD_STEP_MS);
+    };
+    arm(0);
+    signal?.addEventListener('abort', () => {
+        clock.clearTimeout(handle);
+        fail(new AbortError('fake-drive: upload aborted'));
+    }, { once: true });
+    let read = 0;
+    return { next: () => ticks[read++] ?? Promise.reject(new AbortError('fake-drive: upload aborted')) };
+}
+
+/** Resolves once `signal` aborts; never, without one. */
+function untilAborted(signal: AbortSignal | undefined): Promise<void> {
+    return new Promise((resolve) => {
+        if (signal?.aborted) resolve();
+        else signal?.addEventListener('abort', () => resolve(), { once: true });
+    });
 }
 
 /** Writes `content` in chunks. Like the SDK, it releases the writer's lock but never closes the stream. */

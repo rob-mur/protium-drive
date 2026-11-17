@@ -28,3 +28,18 @@ Feature: Drive failures reach the client as HTTP statuses
     And the Drive refuses the next upload into "Photos" because the name exists
     When the user writes "sand and sea" to "Photos/beach.jpg"
     Then the write fails as a conflict
+
+  @id:an-upload-that-moves-no-bytes-reaches-the-user-as-a-gateway-timeout
+  Scenario: An upload that moves no bytes reaches the user as a gateway timeout, and frees its place
+    Given a Drive whose My files holds the folder "Photos"
+    And the next upload into "Photos" stops moving bytes
+    When the user writes "sand and sea" to "Photos/beach.jpg" while 10 minutes pass
+    And the user writes "sand and sea" to "Photos/beach.jpg"
+    Then the first write fails as a gateway timeout, and the second one succeeds
+
+  @id:a-slow-upload-that-still-moves-bytes-is-not-aborted
+  Scenario: A slow upload that still moves bytes is not aborted
+    Given a Drive whose My files holds the folder "Photos"
+    And the next upload into "Photos" moves a tenth of its bytes each minute
+    When the user writes "sand and sea" to "Photos/beach.jpg" while 10 minutes pass
+    Then within 10 seconds the Drive holds "Photos/beach.jpg" containing "sand and sea"

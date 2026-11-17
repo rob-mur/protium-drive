@@ -450,6 +450,29 @@ export class DriveWorld extends World {
     await this.act("write", path, (client) => client.write(path, new TextEncoder().encode(text)));
   }
 
+  /**
+   * Writes `text` to `path` while the Receive arm's clock moves on by `seconds`: it starts the
+   * write, waits until the Drive's upload has started, moves the clock, then gives the write
+   * SETTLE_MS to end. A write that does not end in that time is recorded as one that did not end.
+   */
+  async writeWhileTimePasses(path: string, text: string, seconds: number): Promise<void> {
+    const serving = await this.ensureServing();
+    const callsBefore = await this.calls(serving);
+    const started = (calls?: CallCounts) => calls?.methods.uploadFromStream ?? 0;
+    const writing = new Rclone(serving.url).write(path, new TextEncoder().encode(text));
+    let ended = false;
+    void writing.then(() => (ended = true));
+    const uploading = await poll(async () => ended || started(await this.calls(serving)) > started(callsBefore), { withinMs: START_MS }).then(
+      () => true,
+      () => false,
+    );
+    if (!uploading) this.trouble(`the upload of ${path} did not start in ${START_MS / 1000} s`);
+    await this.pass(seconds);
+    const unended: Outcome = { command: `writing ${path}`, exitCode: -1, stdout: new Uint8Array(), stderr: `the write did not end ${SETTLE_MS / 1000} s after the clock moved`, exchanges: [], timedOut: true };
+    const outcome = await Promise.race([writing, new Promise<Outcome>((resolve) => setTimeout(() => resolve(unended), SETTLE_MS))]);
+    this.actions.push({ kind: "write", path, outcome, callsBefore, callsAfter: await this.calls(serving) });
+  }
+
   async deleteFile(path: string): Promise<void> {
     await this.act("delete", path, (client) => client.deleteFile(path));
   }

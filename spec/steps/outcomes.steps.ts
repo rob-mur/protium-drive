@@ -7,6 +7,7 @@ import { join } from "node:path";
 
 import { Control, type CallCounts } from "../support/send/control.ts";
 import { isMounted, listMounted, type MountOutcome, readMounted } from "../support/send/mount.ts";
+import { describe } from "../support/send/rclone.ts";
 import { claim, decode, last, refusedWith, type Row, says, showsExactly, sum } from "./claims.ts";
 import { DIR_CACHE_TIME_FLAG, type DriveWorld, mountedLines } from "./world.ts";
 
@@ -34,6 +35,13 @@ Then(/^the read fails as a bad gateway saying the data failed verification$/, fu
 
 Then(/^the listing fails as unavailable, to retry after (\d+) seconds$/, function (this: DriveWorld, seconds: string) {
   refusedWith(this, last(this, "list"), "PROPFIND", 503, Number(seconds));
+});
+
+Then(/^the first write fails as a gateway timeout, and the second one succeeds$/, function (this: DriveWorld) {
+  const [first, second] = this.actionsOf("write");
+  claim(first && second, () => `two writes were not recorded.\n${this.whatHappened()}`);
+  refusedWith(this, first, "PUT", 504);
+  claim(second.outcome.exitCode === 0, () => `the second write of "${second.path}" failed:\n${describe(second.outcome)}\n${this.whatHappened()}`);
 });
 
 Then(/^the write fails as a conflict$/, function (this: DriveWorld) {
