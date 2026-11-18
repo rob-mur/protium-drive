@@ -3,6 +3,8 @@
   stdenvNoCC,
   bun,
   makeWrapper,
+  glib,
+  libsecret,
   rclone,
   # The git revision this build was made from; --version names it.
   revision ? "unknown",
@@ -69,6 +71,7 @@ stdenvNoCC.mkDerivation {
     makeWrapper ${lib.getExe bun} $out/bin/proton-drive-mount \
       --set PDM_RCLONE ${lib.getExe rclone} \
       --set PDM_BUILD_REVISION ${lib.escapeShellArg revision} \
+      --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [ libsecret glib ]} \
       --add-flags "$app/src/main.ts"
     runHook postInstall
   '';

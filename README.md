@@ -239,8 +239,15 @@ systemctl --user restart proton-drive-mount
 - The session file `session.json` has mode 0600, in a state folder with mode 0700. Only you can
   read it. It holds the refresh token and the key password, so anyone who can read it has full
   access to your Proton account.
-- `auth logout` deletes the session file. It does not call Proton, so Proton keeps the session
-  until it expires. Revoke it in your Proton account settings to end it sooner.
+- Unlocking a node key can take about 0.4 s of CPU. To skip that work after a restart,
+  `serve` and `mount` keep unlocked node keys in `key-cache.json` in the state folder, with
+  mode 0600. Each key is encrypted with AES-256-GCM under a secret that your desktop keyring
+  holds, as the item `proton-drive-mount` / `key-cache`, so the file is of no use without
+  that keyring. If no keyring is reachable, for example on a host with no Secret Service,
+  the unlocked keys stay in memory only and every key is unlocked again after a restart.
+- `auth logout` deletes the session file, the saved listings, `key-cache.json` and its
+  keyring item. It does not call Proton, so Proton keeps the session until it expires.
+  Revoke it in your Proton account settings to end it sooner.
 
 ## Uninstall
 

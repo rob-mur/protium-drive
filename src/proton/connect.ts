@@ -3,7 +3,6 @@ import path from 'node:path';
 import { CryptoProxy } from '@protontech/crypto';
 import { computeKeyPassword, generateKeySalt, getRandomSrpVerifier, getSrp } from '@protontech/crypto/srp';
 import {
-    MemoryCache,
     OpenPGPCryptoWithCryptoProxy,
     type ProtonDriveHTTPClientBlobRequest,
     type ProtonDriveHTTPClientJsonRequest,
@@ -23,7 +22,11 @@ import { APP_VERSION } from '../version';
 import { FileCredentials } from '../session/credentials';
 import { SessionFileStore } from '../session/store';
 import type { DriveSdk } from '../drive/sdk';
-import { initCryptoWorker, stopCryptoWorker } from './crypto-pool';
+import { ListingSaver } from '../drive/listing-saver';
+import { cacheUnlockedKeys, initCryptoWorker, stopCryptoWorker } from './crypto-pool';
+import { UnlockedKeyCache } from './key-cache';
+import { systemKeyring } from './keyring';
+import { createSdkCaches } from './sdk-caches';
 
 /** Third-party clients sign in as `external-drive`; `cli-drive` is reserved for Proton's own CLI. */
 export const AUTH_CLIENT_ID = 'external-drive';
@@ -102,18 +105,45 @@ export async function connect(options: {
         srpApi: { computeKeyPassword, generateKeySalt, getRandomSrpVerifier, getSrp },
         logger,
     });
-    const createDriveClient = async (): Promise<DriveSdk> =>
-        new ProtonDriveClient({
+    // Opened with the first Drive client, after the account keys are unlocked, so signing in
+    // never asks the keyring and the cache holds node keys only.
+    let keyCache: { cache: UnlockedKeyCache; saver: ListingSaver } | undefined;
+    const createDriveClient = async (): Promise<DriveSdk> => {
+        if (keyCache === undefined) {
+            const cache = await UnlockedKeyCache.open({ stateDir, keyring: systemKeyring, logger });
+            const saver = new ListingSaver({
+                state: () => cache.state(),
+                save: () => cache.save(),
+                onError: (error) => logger.warn(`Could not save the unlocked-key cache: ${errorMessage(error)}`),
+            });
+            cacheUnlockedKeys(cache);
+            saver.start();
+            keyCache = { cache, saver };
+        }
+        return new ProtonDriveClient({
             config: { baseUrl: DEFAULT_BASE_URL, clientUid: await getOrCreateClientUid(stateDir) },
             httpClient: new SdkHttpClient(apiClient),
-            entitiesCache: new MemoryCache(),
-            cryptoCache: new MemoryCache(),
+            ...createSdkCaches({ clearKey: (key) => CryptoProxy.clearKey({ key }) }),
             account: addresses,
             srpModule: srp,
             openPGPCryptoModule: new OpenPGPCryptoWithCryptoProxy(CryptoProxy),
             telemetry: createTelemetry(logger),
         });
-    return { auth, credentials, createDriveClient, stop: stopCryptoWorker };
+    };
+    const stop = async (): Promise<void> => {
+        if (keyCache !== undefined) {
+            await keyCache.saver.stop();
+            await keyCache.cache.save().catch((error: unknown) => logger.warn(`Could not save the unlocked-key cache: ${errorMessage(error)}`));
+            cacheUnlockedKeys(undefined);
+            keyCache = undefined;
+        }
+        await stopCryptoWorker();
+    };
+    return { auth, credentials, createDriveClient, stop };
+}
+
+function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
 }
 
 /** Same as the CLI's HTTP client, but with ky retries off: the SDK already retries and backs off on 429. */

@@ -17,6 +17,8 @@ import { acquireStateLock } from './session/lock.ts';
 import { SessionFileStore } from './session/store.ts';
 import { THIRD_PARTY_NOTICE } from './notice.ts';
 import { migrateNodeKeysCommand } from './migrate.ts';
+import { removeKeyCache } from './proton/key-cache.ts';
+import { systemKeyring, type Keyring } from './proton/keyring.ts';
 import { cacheSettings, DEFAULT_CACHE, mountCommand, mountDeps } from './mount.ts';
 import { serveCommand, DEFAULT_HOST, DEFAULT_PORT } from './serve.ts';
 import { APP_VERSION, VERSION, buildRevision } from './version.ts';
@@ -156,17 +158,18 @@ export async function authStatus(stateDir: string, output: Output = CONSOLE_OUTP
 }
 
 /**
- * Deletes the local session file, and the saved listings with it, since they
- * hold the account's file names. It never calls Proton, so Proton keeps the
+ * Deletes the local session file, and the saved listings and unlocked keys with
+ * it, since they hold the account's file names and keys. It never calls Proton, so Proton keeps the
  * session until it expires or the user revokes it there. It takes the state
  * lock, so it refuses while a serve uses the session.
  */
-export async function authLogout(stateDir: string, output: Output = CONSOLE_OUTPUT): Promise<number> {
+export async function authLogout(stateDir: string, output: Output = CONSOLE_OUTPUT, keyring: Keyring = systemKeyring): Promise<number> {
     const release = await acquireStateLock(stateDir);
     let removed: boolean;
     try {
         removed = await new SessionFileStore(stateDir).remove();
         await new ListingCacheFile(stateDir).remove();
+        await removeKeyCache(stateDir, keyring);
     } finally {
         await release();
     }

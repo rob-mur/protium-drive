@@ -4,9 +4,27 @@ import { mainThreadTransferHandlers } from '@protontech/crypto/proxy/endpoint/wo
 import { transferHandlers, wrap, releaseProxy, type Remote } from 'comlink';
 import { readPrivateKey } from 'openpgp';
 
+import type { LockedKey } from './key-cache';
+
 type Lane = { worker: Worker; api: Remote<Api> };
 
+/** Where Argon2-unlocked keys are kept, so each one is unlocked once: see `UnlockedKeyCache`. */
+export type UnlockedKeyStore = {
+    get(locked: LockedKey): Promise<Uint8Array | undefined>;
+    set(locked: LockedKey, unlocked: Uint8Array): Promise<void>;
+};
+
 let lanes: { main: Lane; unlock: Lane } | undefined;
+let unlockedKeys: UnlockedKeyStore | undefined;
+
+/**
+ * Keeps each key the unlock worker unlocks in `store`, and takes a key from there rather than
+ * unlocking it again; `undefined` stops that. A store that fails only costs the unlock it would
+ * have saved.
+ */
+export function cacheUnlockedKeys(store: UnlockedKeyStore | undefined): void {
+    unlockedKeys = store;
+}
 
 /**
  * Routes `CryptoProxy` to two crypto workers, once.
@@ -17,8 +35,8 @@ let lanes: { main: Lane; unlock: Lane } | undefined;
  * worker takes them one at a time, so memory stays at one unlock's 128 MiB however many files a
  * listing touches. The main worker does all other crypto, so new keys, encryption and cheap
  * unlocks never wait behind a walk. The unlock worker hands each unlocked key to the main worker
- * over the worker message channel and forgets it; unlocked keys live only in the workers' memory,
- * never on disk.
+ * over the worker message channel and forgets it. With `cacheUnlockedKeys`, each unlocked key is
+ * also kept, encrypted, in the unlocked-key cache, and a key found there skips the unlock worker.
  */
 export function initCryptoWorker(): void {
     if (lanes !== undefined) {
@@ -36,9 +54,21 @@ export function initCryptoWorker(): void {
         if (options.passphrase === null || !(await isArgon2Locked(options))) {
             return main.api.importPrivateKey(options);
         }
+        const locked = { armoredKey: options.armoredKey, binaryKey: options.binaryKey, passphrase: options.passphrase };
+        const store = unlockedKeys;
+        const cached = await store?.get(locked).catch(() => undefined);
+        if (cached !== undefined) {
+            try {
+                return await main.api.importPrivateKey({ binaryKey: cached as Uint8Array<ArrayBuffer>, passphrase: null });
+            } catch {
+                // Unlock it again, below.
+            }
+        }
         const unlocked = unlocking.then(() => unlockAndExport(unlock.api, options));
         unlocking = unlocked.catch(() => undefined);
-        return main.api.importPrivateKey({ binaryKey: await unlocked, passphrase: null });
+        const binaryKey = await unlocked;
+        await store?.set(locked, binaryKey).catch(() => undefined);
+        return main.api.importPrivateKey({ binaryKey, passphrase: null });
     };
     const endpoint = new Proxy(main.api, {
         get: (target, property, receiver) => (property === 'importPrivateKey' ? importPrivateKey : Reflect.get(target, property, receiver)),

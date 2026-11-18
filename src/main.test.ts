@@ -14,6 +14,8 @@ import { SessionFileStore } from './session/store.ts';
 import { acquireStateLock } from './session/lock.ts';
 import { FakeDrive } from '../fake-drive/drive.ts';
 import { TEMPORARY_SUFFIX } from './migrate.ts';
+import { KEY_CACHE_FILE_NAME } from './proton/key-cache.ts';
+import type { Keyring } from './proton/keyring.ts';
 
 const REV = 'b'.repeat(40);
 const ENV = { PDM_BUILD_REVISION: REV };
@@ -457,6 +459,28 @@ describe('auth status', () => {
         await cache.write({ rootUid: 'root', eventScopeId: 'volume', lastEventId: 'event-1', listings: new Map([['root', []]]) });
         await authLogout(stateDir, { print: () => {}, error: () => {} });
         expect(await cache.read()).toBeUndefined();
+    });
+
+    test('deletes the saved unlocked keys and their keyring item', async () => {
+        const stateDir = mkdtemp('logout-keys');
+        await new SessionFileStore(stateDir).save(storedSession());
+        await Bun.write(join(stateDir, KEY_CACHE_FILE_NAME), '{"version":1,"entries":{}}');
+        let item: string | null = 'secret';
+        const keyring: Keyring = {
+            get: async () => item,
+            set: async (value) => {
+                item = value;
+            },
+            delete: async () => {
+                item = null;
+                return true;
+            },
+        };
+
+        await authLogout(stateDir, { print: () => {}, error: () => {} }, keyring);
+
+        expect(await Bun.file(join(stateDir, KEY_CACHE_FILE_NAME)).exists()).toBe(false);
+        expect(item).toBeNull();
     });
 
     test('without a session it says so and exits 0', async () => {
