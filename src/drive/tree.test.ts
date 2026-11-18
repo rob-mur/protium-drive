@@ -636,6 +636,98 @@ describe('DriveTree upload that moves no bytes', () => {
         expect(timers.pending.size).toBe(0);
     });
 
+    /**
+     * The stalling SDK, but its `getFileUploader` and `getFileRevisionUploader` hand back the
+     * uploader only when the test calls `give`, as when the SDK's upload queue is full. The wait
+     * fails with AbortError once its signal aborts, unless `ignoresAbort`.
+     */
+    function waitingSdk(ignoresAbort = false) {
+        const { sdk, state } = stallingSdk();
+        const wait = { asked: false, give: () => {} };
+        const held = <T>(signal: AbortSignal | undefined, uploader: () => Promise<T>) =>
+            new Promise<T>((resolve, reject) => {
+                wait.asked = true;
+                wait.give = () => void uploader().then(resolve, reject);
+                if (!ignoresAbort) {
+                    signal?.addEventListener('abort', () => reject(new AbortError('waiting aborted')), { once: true });
+                }
+            });
+        const waiting = {
+            ...sdk,
+            getFileUploader: (parent: NodeOrUid, name: string, metadata: unknown, signal?: AbortSignal) =>
+                held(signal, () => sdk.getFileUploader(parent, name, metadata as never, signal)),
+            getFileRevisionUploader: (uid: NodeOrUid, metadata: unknown, signal?: AbortSignal) =>
+                held(signal, () => sdk.getFileUploader('photos', 'beach.jpg', metadata as never, signal)),
+        } as unknown as DriveSdk;
+        return { sdk: waiting, state, wait };
+    }
+
+    /** Waits until the upload has asked the SDK for an uploader. */
+    async function asked(wait: { asked: boolean }) {
+        for (let i = 0; i < 100 && !wait.asked; i++) await Promise.resolve();
+        expect(wait.asked).toBe(true);
+    }
+
+    test('an upload that waits the stall time for an uploader is aborted, and fails as a gateway timeout with the stall message', async () => {
+        const timers = manualTimers();
+        const { sdk, state, wait } = waitingSdk();
+        const tree = new DriveTree(sdk, QUIET, new Backoff(), timers);
+        const upload = tree.upload(['Photos'], 'beach.jpg', body(), { mediaType: 'image/jpeg' });
+        await asked(wait);
+        expect([...timers.pending.values()].map((timer) => timer.ms)).toEqual([UPLOAD_STALL_MS]);
+        timers.fire();
+        expect(state.signal).toBeUndefined();
+        await expect(upload).rejects.toMatchObject({
+            name: 'DriveError',
+            status: 504,
+            message: `beach.jpg moved no bytes for ${UPLOAD_STALL_MS / 1000}s, so its upload was aborted`,
+        });
+        expect(state.started).toBe(false);
+        expect(timers.pending.size).toBe(0);
+    });
+
+    test('a new revision that waits the stall time for an uploader fails as a gateway timeout too', async () => {
+        const timers = manualTimers();
+        const { sdk, wait } = waitingSdk();
+        const existing = new Map([...nodes(), ['beach', file('beach', 'beach.jpg', 'photos')]]);
+        const tree = new DriveTree({ ...fakeSdk(existing), getFileRevisionUploader: sdk.getFileRevisionUploader } as unknown as DriveSdk, QUIET, new Backoff(), timers);
+        const upload = tree.upload(['Photos'], 'beach.jpg', body(), { mediaType: 'image/jpeg' });
+        await asked(wait);
+        timers.fire();
+        await expect(upload).rejects.toMatchObject({ name: 'DriveError', status: 504 });
+    });
+
+    test('a wait for an uploader that ignores the abort still fails at once', async () => {
+        const timers = manualTimers();
+        const { sdk, wait } = waitingSdk(true);
+        const tree = new DriveTree(sdk, QUIET, new Backoff(), timers);
+        const upload = tree.upload(['Photos'], 'beach.jpg', body(), { mediaType: 'image/jpeg' });
+        await asked(wait);
+        timers.fire();
+        await expect(upload).rejects.toMatchObject({ name: 'DriveError', status: 504 });
+    });
+
+    test('an upload that gets its uploader in time gets the whole stall time again, and makes progress as before', async () => {
+        const timers = manualTimers();
+        const { sdk, state, wait } = waitingSdk();
+        const tree = new DriveTree(sdk, QUIET, new Backoff(), timers);
+        const upload = tree.upload(['Photos'], 'beach.jpg', body(), { mediaType: 'image/jpeg' });
+        await asked(wait);
+        const waiting = [...timers.pending.keys()];
+        wait.give();
+        await started(state);
+        const uploading = [...timers.pending.keys()];
+        expect(uploading).toHaveLength(1);
+        expect(uploading).not.toEqual(waiting);
+        expect(timers.pending.get(uploading[0]!)?.ms).toBe(UPLOAD_STALL_MS);
+        state.progress(4 * 1024 * 1024);
+        state.finish();
+        const { entry } = await upload;
+        expect(entry.name).toBe('beach.jpg');
+        expect(state.signal?.aborted).toBe(false);
+        expect(timers.pending.size).toBe(0);
+    });
+
     /** A logger that records each line as `level: message error`. */
     function recordingLogger() {
         const lines: string[] = [];

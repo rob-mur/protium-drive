@@ -313,13 +313,16 @@ export class DriveTree {
             signal?.addEventListener('abort', onClientAbort, { once: true });
             return withUploadRequest(clientFirst.signal, async () => {
                 try {
-                    const uploader = existing
-                        ? await this.sdk.getFileRevisionUploader(existing.uid, metadata, uploadSignal)
-                        : await this.sdk.getFileUploader(parent.uid, name, metadata, uploadSignal);
+                    // The stall time counts the wait for an uploader too: a queue slot the SDK
+                    // never frees would otherwise hold the PUT until the client gives up.
                     stall.restart();
                     // The race ends the PUT on a stall even if the SDK is slow to honour the abort.
                     const result = await Promise.race([
                         (async () => {
+                            const uploader = existing
+                                ? await this.sdk.getFileRevisionUploader(existing.uid, metadata, uploadSignal)
+                                : await this.sdk.getFileUploader(parent.uid, name, metadata, uploadSignal);
+                            stall.restart();
                             const controller = await uploader.uploadFromStream(body, [], () => stall.restart());
                             return controller.completion();
                         })(),
