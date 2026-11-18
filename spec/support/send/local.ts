@@ -19,16 +19,19 @@ export interface LocalRequest {
   path: string;
   /** The Host header to send, `host:port`. */
   host: string;
+  /** The Authorization header to send; unset, none. */
+  authorization?: string;
 }
 
 /**
  * Sends one HTTP/1.1 request to the serve at `url` over a plain socket, so nothing but this
- * function chooses its headers: no Authorization, and the Host header given.
+ * function chooses its headers: the Host header given, and Authorization only when given.
  */
 export function rawRequest(url: string, request: LocalRequest): Promise<LocalAnswer> {
   const target = new URL(url);
   const path = `/${request.path.split("/").map(encodeURIComponent).join("/")}/`;
-  const head = [`${request.method} ${path} HTTP/1.1`, `Host: ${request.host}`, "Depth: 1", "Content-Length: 0", "Connection: close", "", ""].join("\r\n");
+  const authorization = request.authorization === undefined ? [] : [`Authorization: ${request.authorization}`];
+  const head = [`${request.method} ${path} HTTP/1.1`, `Host: ${request.host}`, ...authorization, "Depth: 1", "Content-Length: 0", "Connection: close", "", ""].join("\r\n");
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
     const socket = connect({ host: target.hostname, port: Number(target.port) });

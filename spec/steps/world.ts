@@ -12,7 +12,8 @@
 //   the Drive after a write polls the control channel with a bound; nothing sleeps.
 import { answersHttp, freePort, poll } from "@cd-pipeline/support";
 import { After, type IWorldOptions, setDefaultTimeout, setWorldConstructor, World } from "@cucumber/cucumber";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -119,6 +120,13 @@ export class DriveWorld extends World {
   logLevel?: string;
   /** The value of LOG_LEVEL_VARIABLE in the environment the user starts the mount in; unset, none. */
   logLevelVariable?: string;
+  /**
+   * The file the user keeps the serve's credential in, with its mode; unset, the serve has no
+   * credential file. The user's own client sends the credential.
+   */
+  credentialFile?: { mode: number };
+  /** The serve's credential, as the file holds it. */
+  readonly credential = randomBytes(32).toString("hex");
 
   // --- what the Whens record --------------------------------------------------
   /** The UID of each node the arranged Drive held, by path. */
@@ -296,8 +304,20 @@ export class DriveWorld extends World {
     } catch (error: unknown) {
       this.trouble(`the arranged Drive could not be written: ${String(error)}`);
     }
+    if (this.credentialFile) {
+      try {
+        writeFileSync(this.credentialPath(), `${this.credential}\n`);
+        chmodSync(this.credentialPath(), this.credentialFile.mode);
+      } catch (error: unknown) {
+        this.trouble(`the credential file could not be written: ${String(error)}`);
+      }
+    }
     if (this.signedIn) this.setupSignIn = await this.signIn();
     if (this.sessionRefused) await this.refuseTheSession();
+  }
+
+  private credentialPath(): string {
+    return join(this.dirs.root, "credential");
   }
 
   /**
@@ -332,8 +352,14 @@ export class DriveWorld extends World {
       this.dirs.drive,
       ...(this.host ? ["--host", this.host] : []),
       ...(this.root ? ["--root", this.root] : []),
+      ...(this.credentialFile ? ["--credential-file", this.credentialPath()] : []),
       ...this.logLevelArgs(),
     ];
+  }
+
+  /** The user's WebDAV client of the serve at `url`: it sends the serve's credential when the user keeps one. */
+  private client(url: string): Rclone {
+    return new Rclone(url, undefined, this.credentialFile ? this.credential : undefined);
   }
 
   private logLevelArgs(): string[] {
@@ -417,7 +443,7 @@ export class DriveWorld extends World {
   private async act(kind: ActionKind, path: string, run: (client: Rclone) => Promise<Outcome>): Promise<Action> {
     const serving = await this.ensureServing();
     const callsBefore = await this.calls(serving);
-    const outcome = await run(new Rclone(serving.url));
+    const outcome = await run(this.client(serving.url));
     const action: Action = { kind, path, outcome, callsBefore, callsAfter: await this.calls(serving) };
     this.actions.push(action);
     return action;
@@ -459,7 +485,7 @@ export class DriveWorld extends World {
     const serving = await this.ensureServing();
     const callsBefore = await this.calls(serving);
     const started = (calls?: CallCounts) => calls?.methods.uploadFromStream ?? 0;
-    const writing = new Rclone(serving.url).write(path, new TextEncoder().encode(text));
+    const writing = this.client(serving.url).write(path, new TextEncoder().encode(text));
     let ended = false;
     void writing.then(() => (ended = true));
     const uploading = await poll(async () => ended || started(await this.calls(serving)) > started(callsBefore), { withinMs: START_MS }).then(
@@ -752,9 +778,22 @@ export class DriveWorld extends World {
     await this.sendLocal(mount, "a program without the mount's credential", path, new URL(mount.url).host);
   }
 
-  private async sendLocal(serving: Serving, who: string, path: string, host: string): Promise<void> {
+  /** A program that lists `path` at the serve's port without the serve's credential. */
+  async listAtServeWithoutCredential(path: string): Promise<void> {
+    const serving = await this.ensureServing();
+    await this.sendLocal(serving, "a program without the serve's credential", path, new URL(serving.url).host);
+  }
+
+  /** A program that lists `path` at the serve's port with a credential that is not the serve's. */
+  async listAtServeWithWrongCredential(path: string): Promise<void> {
+    const serving = await this.ensureServing();
+    const wrong = `Bearer ${randomBytes(32).toString("hex")}`;
+    await this.sendLocal(serving, "a program with a wrong credential", path, new URL(serving.url).host, wrong);
+  }
+
+  private async sendLocal(serving: Serving, who: string, path: string, host: string, authorization?: string): Promise<void> {
     const callsBefore = await this.calls(serving);
-    const answer = await rawRequest(serving.url, { method: "PROPFIND", path, host });
+    const answer = await rawRequest(serving.url, { method: "PROPFIND", path, host, authorization });
     this.localRequests.push({ who, path, answer, callsBefore, callsAfter: await this.calls(serving) });
   }
 

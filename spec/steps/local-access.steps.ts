@@ -1,5 +1,5 @@
 // The Whens and Thens of other programs on the same machine: a web page that reached the port by
-// DNS rebinding, a program without the mount's credential, and a program that reads `ps`.
+// DNS rebinding, a program without the mount's or the serve's credential, and a program that reads `ps`.
 import { Then, When } from "@cucumber/cucumber";
 
 import type { CallCounts } from "../support/send/control.ts";
@@ -17,6 +17,14 @@ When(/^another program lists "([^"]*)" at the mount's port without the mount's c
   await this.listAtMountWithoutCredential(path);
 });
 
+When(/^another program lists "([^"]*)" at the serve's port without the serve's credential$/, async function (this: DriveWorld, path: string) {
+  await this.listAtServeWithoutCredential(path);
+});
+
+When(/^another program lists "([^"]*)" at the serve's port with a wrong credential$/, async function (this: DriveWorld, path: string) {
+  await this.listAtServeWithWrongCredential(path);
+});
+
 When(/^another program reads the mount's processes from the process table$/, async function (this: DriveWorld) {
   await this.readMountProcesses();
 });
@@ -30,6 +38,10 @@ Then(/^the serve refuses the web page as misdirected, and the Drive did not list
 });
 
 Then(/^the mount's port refuses the program as unauthorised, and the Drive did not list "([^"]*)"$/, function (this: DriveWorld, folder: string) {
+  refusedBeforeTheDrive(this, 401, folder);
+});
+
+Then(/^the serve's port refuses the program as unauthorised, and the Drive did not list "([^"]*)"$/, function (this: DriveWorld, folder: string) {
   refusedBeforeTheDrive(this, 401, folder);
 });
 

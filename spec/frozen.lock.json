@@ -310,6 +310,38 @@
       "id": "a-killed-serve-lists-a-large-folder-without-loading-its-nodes",
       "path": "spec/features/listing-performance.feature",
       "expected_status": "green"
+    },
+    {
+      "id": "a-serve-with-a-credential-file-refuses-a-program-without-it",
+      "path": "spec/features/local-access.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the serve's port refuses the program as unauthorised, and the Drive did not list \"([^\"]*)\"$"
+      ]
+    },
+    {
+      "id": "a-serve-with-a-credential-file-refuses-a-wrong-credential",
+      "path": "spec/features/local-access.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the serve's port refuses the program as unauthorised, and the Drive did not list \"([^\"]*)\"$"
+      ]
+    },
+    {
+      "id": "a-serve-with-a-credential-file-answers-a-client-that-sends-it",
+      "path": "spec/features/local-access.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the listing shows exactly:$"
+      ]
+    },
+    {
+      "id": "a-serve-refuses-a-credential-file-other-users-can-read",
+      "path": "spec/features/local-access.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the serve exits (\\d+) saying \"(.*)\"$"
+      ]
     }
   ]
 }

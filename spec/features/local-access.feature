@@ -27,3 +27,33 @@ Feature: Only the user's own clients reach the Drive through the local port
     When the user starts the serve
     And another program reads which addresses the serve's port listens on
     Then the serve's port listens on 127.0.0.1 and on no other address
+
+  @id:a-serve-with-a-credential-file-refuses-a-program-without-it
+  Scenario: A serve started with a credential file refuses a program that lacks the credential
+    Given a Drive whose My files holds the file "Photos/beach.jpg" containing "sand and sea"
+    And the user keeps the serve's credential in a file only they can read
+    When another program lists "Photos" at the serve's port without the serve's credential
+    Then the serve's port refuses the program as unauthorised, and the Drive did not list "Photos"
+
+  @id:a-serve-with-a-credential-file-refuses-a-wrong-credential
+  Scenario: A serve started with a credential file refuses a program that sends a wrong credential
+    Given a Drive whose My files holds the file "Photos/beach.jpg" containing "sand and sea"
+    And the user keeps the serve's credential in a file only they can read
+    When another program lists "Photos" at the serve's port with a wrong credential
+    Then the serve's port refuses the program as unauthorised, and the Drive did not list "Photos"
+
+  @id:a-serve-with-a-credential-file-answers-a-client-that-sends-it
+  Scenario: A serve started with a credential file answers the user's client that sends the credential
+    Given a Drive whose My files holds the file "Photos/beach.jpg" containing "sand and sea"
+    And the user keeps the serve's credential in a file only they can read
+    When the user lists "Photos"
+    Then the listing shows exactly:
+      | name      | kind | size |
+      | beach.jpg | file | 12   |
+
+  @id:a-serve-refuses-a-credential-file-other-users-can-read
+  Scenario: A serve refuses to start with a credential file that other users can read
+    Given a Drive whose My files holds the folder "Photos"
+    And the user keeps the serve's credential in a file that other users can read
+    When the user starts the serve
+    Then the serve exits 1 saying "chmod 600"

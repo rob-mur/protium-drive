@@ -41,10 +41,14 @@ export interface Entry {
 const COMMAND_TIMEOUT_MS = 120_000;
 
 export class Rclone {
-  /** `url`: the serve, as `http://127.0.0.1:<port>/`. */
+  /**
+   * `url`: the serve, as `http://127.0.0.1:<port>/`. `bearerToken`: the serve's credential, which
+   * the client sends as rclone's webdav `bearer_token`; unset, it sends none.
+   */
   constructor(
     readonly url: string,
     private readonly executable = process.env.PDM_RCLONE || "rclone",
+    private readonly bearerToken?: string,
   ) {}
 
   /** The entries of the folder `path` ("" is the root). */
@@ -86,7 +90,8 @@ export class Rclone {
   }
 
   private remote(path: string): string {
-    return `:webdav,url="${this.url}",vendor=other:${path}`;
+    const token = this.bearerToken === undefined ? "" : `,bearer_token="${this.bearerToken}"`;
+    return `:webdav,url="${this.url}",vendor=other${token}:${path}`;
   }
 
   private run(args: string[], stdin?: Uint8Array): Promise<Outcome> {

@@ -86,6 +86,14 @@ Given(/^Proton has refused the stored session$/, function (this: DriveWorld) {
   this.sessionRefused = true;
 });
 
+Given(/^the user keeps the serve's credential in a file only they can read$/, function (this: DriveWorld) {
+  this.credentialFile = { mode: 0o600 };
+});
+
+Given(/^the user keeps the serve's credential in a file that other users can read$/, function (this: DriveWorld) {
+  this.credentialFile = { mode: 0o644 };
+});
+
 Given(/^the user mounts the Drive at a folder$/, function (this: DriveWorld) {
   this.mounted = true;
 });
