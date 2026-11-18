@@ -534,6 +534,50 @@ describe('mountCommand', () => {
         expect(warnings[1]).toBe('Photos/new.jpg is not yet on the Drive. The next mount with this cache folder, state dir and root uploads it.');
     });
 
+    test('while it runs, logs how many uploads are pending: a baseline, the count rising in a burst of writes, and one 0 when they are all on the Drive', async () => {
+        const infos: string[] = [];
+        const logger: Logger = { ...QUIET, info: (message: string) => void infos.push(message) };
+        const cacheDir = mkdtempSync(join(tmpdir(), 'pdm-cache-'));
+        let folder = '';
+        const rclone = fakeRclone([], []);
+        const abort = new AbortController();
+        const running = mountCommand(
+            { ...BASE, logger, cache: { ...CACHE, cacheDir }, signal: abort.signal },
+            {
+                serve: fakeServe([]),
+                startRclone: (exe, args, config, env) => {
+                    folder = cacheFolder(env.RCLONE_WEBDAV_BEARER_TOKEN!);
+                    return rclone(exe, args, config, env);
+                },
+                rclone: 'rclone',
+                prepareMountpoint: READY,
+                pendingEveryMs: 20,
+            },
+        );
+        const counts = () => infos.filter((line) => / pending$/.test(line));
+        const settle = () => new Promise((r) => setTimeout(r, 80));
+        await settle();
+        expect(counts()).toEqual(['0 uploads pending']);
+        cacheWith({ 'Photos/a.jpg': true }, folder, cacheDir);
+        await settle();
+        expect(counts().at(-1)).toBe('1 upload pending');
+        cacheWith({ 'Photos/b.jpg': true, 'Photos/c.jpg': true }, folder, cacheDir);
+        await settle();
+        expect(counts().at(-1)).toBe('3 uploads pending');
+        cacheWith({ 'Photos/a.jpg': false, 'Photos/b.jpg': false, 'Photos/c.jpg': false }, folder, cacheDir);
+        await settle();
+        await settle();
+        abort.abort();
+        expect(await running).toBe(0);
+        const logged = counts();
+        expect(logged.at(-1)).toBe('0 uploads pending');
+        expect(logged.filter((line) => line === '0 uploads pending')).toHaveLength(2);
+        expect(logged.indexOf('3 uploads pending')).toBeGreaterThan(logged.indexOf('1 upload pending'));
+        const ticks = logged.length;
+        await settle();
+        expect(counts()).toHaveLength(ticks);
+    });
+
     test('returns the serve code without starting rclone when the serve ends before it listens', async () => {
         const calls: { args: string[] }[] = [];
         const result = await mountCommand(

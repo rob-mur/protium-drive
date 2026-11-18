@@ -79,6 +79,18 @@ A write waits in the cache folder until it reaches the Drive, and a stop does no
 it. The mount logs each file not yet on the Drive when it stops. The next mount with the same
 cache folder, `--state-dir` and `--root` uploads it, also after a crash.
 
+While it runs, the mount logs how many uploads are pending, at info, once a minute:
+
+```
+info: 3 uploads pending
+info: 1 upload pending
+info: 0 uploads pending
+```
+
+It logs the first count a minute after it mounts, also when it is 0. After that, it logs a count
+each minute while some uploads are pending, and one `0 uploads pending` when all of them are on
+the Drive. Before you stop the mount, wait for `0 uploads pending`.
+
 ## Cache settings
 
 | Flag | Default | What it does |

@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { closeSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
@@ -197,6 +198,71 @@ export function pendingWrites(cacheDir: string, folder: string): string[] {
         .sort();
 }
 
+/**
+ * How many files rclone holds in `folder` of `cacheDir` and has not yet uploaded, by the same test
+ * as pendingWrites. It reads the cache without blocking, so a running serve does not wait on it.
+ */
+export async function countPendingWrites(cacheDir: string, folder: string): Promise<number> {
+    const root = path.join(cacheDir, 'vfsMeta', folder);
+    let entries;
+    try {
+        entries = await readdir(root, { recursive: true, withFileTypes: true });
+    } catch {
+        return 0;
+    }
+    const files = entries.filter((entry) => entry.isFile()).map((entry) => path.relative(root, path.join(entry.parentPath, entry.name)));
+    const pending = await Promise.all(
+        files.map(async (file) => {
+            try {
+                return JSON.parse(await readFile(path.join(root, file), 'utf8'))?.Dirty === true;
+            } catch {
+                try {
+                    const { size, blocks } = await stat(path.join(cacheDir, 'vfs', folder, file));
+                    return blocks * 512 >= size;
+                } catch {
+                    return false;
+                }
+            }
+        }),
+    );
+    return pending.filter(Boolean).length;
+}
+
+/** The line that gives how many uploads are pending. */
+export function pendingLine(count: number): string {
+    return `${count} ${count === 1 ? 'upload' : 'uploads'} pending`;
+}
+
+/** How often a running mount logs how many uploads are pending. */
+export const PENDING_EVERY_MS = 60_000;
+
+/**
+ * Every `everyMs`, logs at info how many uploads in `folder` of `cacheDir` are pending: always on the
+ * first tick, on each tick while some are, and once when the last one is on the Drive. Returns the stop.
+ */
+function reportPending(cacheDir: string, folder: string, everyMs: number, logger: Logger): () => void {
+    let last: number | undefined;
+    let scanning = false;
+    let stopped = false;
+    const tick = async () => {
+        if (scanning) return;
+        scanning = true;
+        try {
+            const count = await countPendingWrites(cacheDir, folder);
+            if (stopped) return;
+            if (last === undefined || count > 0 || last > 0) logger.info(pendingLine(count));
+            last = count;
+        } finally {
+            scanning = false;
+        }
+    };
+    const timer = setInterval(() => void tick(), everyMs);
+    return () => {
+        stopped = true;
+        clearInterval(timer);
+    };
+}
+
 /** The folder, in the cache dir, where the mount notes which mount made each cache folder. */
 const OWNERS = 'proton-drive-mount';
 
@@ -347,6 +413,8 @@ export interface MountDeps {
     rclone: string;
     /** Makes the mountpoint an empty folder rclone can mount on, or says why it will not. */
     prepareMountpoint: (path: string) => Promise<MountpointRefusal | undefined>;
+    /** How often the running mount logs how many uploads are pending. PENDING_EVERY_MS when not given. */
+    pendingEveryMs?: number;
 }
 
 export function mountDeps(env: NodeJS.ProcessEnv = process.env): MountDeps {
@@ -363,7 +431,8 @@ export function mountDeps(env: NodeJS.ProcessEnv = process.env): MountDeps {
  * runs the serve and an rclone mount of it until the signal comes, then stops rclone (which
  * unmounts) and then the serve. Either one ending on its own ends the other. rclone does not
  * wait for its uploads when it stops, so the mount then names each file not yet on the Drive;
- * the next mount with the same cache folder uploads them.
+ * the next mount with the same cache folder uploads them. While it runs, it logs how many uploads
+ * are pending every minute (see reportPending).
  *
  * Each run makes a fresh credential that the serve demands on every request. rclone gets it
  * in its environment, which only this user can read, and never on its command line, which every
@@ -399,6 +468,7 @@ export async function mountCommand(options: MountOptions, deps: MountDeps = moun
     logger.debug(`Starting rclone ${args.join(' ')}`);
     const rclone = deps.startRclone(deps.rclone, args, rcloneConfig(first), { RCLONE_WEBDAV_BEARER_TOKEN: credential });
     logger.info(`Mounting ${first.href} at ${mountpoint}`);
+    const stopReporting = reportPending(cache.cacheDir, folder, deps.pendingEveryMs ?? PENDING_EVERY_MS, logger);
     const aborted = new Promise<'signal'>((resolve) => {
         if (signal?.aborted) resolve('signal');
         signal?.addEventListener('abort', () => resolve('signal'), { once: true });
@@ -414,6 +484,7 @@ export async function mountCommand(options: MountOptions, deps: MountDeps = moun
         rclone.stop();
     }
     const rcloneCode = await rclone.exited;
+    stopReporting();
     for (const pending of pendingWrites(cache.cacheDir, folder)) {
         logger.warn(`${pending} is not yet on the Drive. The next mount with this cache folder, state dir and root uploads it.`);
     }
