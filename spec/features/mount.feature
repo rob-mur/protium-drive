@@ -71,3 +71,19 @@ Feature: Mounting the Drive as a folder
     When the user starts the mount
     And the mount is stopped
     Then the mount exits 0 on its own, and the folder is no longer mounted
+
+  @id:a-running-mount-logs-a-write-not-yet-on-the-drive-as-pending
+  Scenario: A running mount logs a write that is not yet on the Drive as a pending upload
+    Given a Drive whose My files holds the folder "Photos"
+    And the next upload into "Photos" stops moving bytes
+    And the user mounts the Drive at a folder
+    When the user writes "sand and snow" to the mounted file "Photos/new.jpg"
+    Then within 90 seconds the mount's latest count of pending uploads is "1 upload pending"
+
+  @id:a-running-mount-logs-0-pending-uploads-once-the-write-is-on-the-drive
+  Scenario: A running mount logs 0 pending uploads once every write is on the Drive
+    Given a Drive whose My files holds the folder "Photos"
+    And the user mounts the Drive at a folder
+    When the user writes "sand and snow" to the mounted file "Photos/new.jpg"
+    Then within 60 seconds the Drive holds "Photos/new.jpg" containing "sand and snow"
+    And within 90 seconds the mount's latest count of pending uploads is "0 uploads pending"

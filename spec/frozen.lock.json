@@ -231,6 +231,22 @@
       ]
     },
     {
+      "id": "a-running-mount-logs-a-write-not-yet-on-the-drive-as-pending",
+      "path": "spec/features/mount.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^within (\\d+) seconds the mount's latest count of pending uploads is \"([^\"]*)\"$"
+      ]
+    },
+    {
+      "id": "a-running-mount-logs-0-pending-uploads-once-the-write-is-on-the-drive",
+      "path": "spec/features/mount.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^within (\\d+) seconds the Drive holds \"([^\"]*)\" containing \"([^\"]*)\"$"
+      ]
+    },
+    {
       "id": "a-mount-without-a-session-exits-as-needing-login",
       "path": "spec/features/needs-login.feature",
       "expected_status": "green"

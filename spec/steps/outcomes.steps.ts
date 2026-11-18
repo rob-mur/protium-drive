@@ -172,6 +172,22 @@ Then(/^the mount's log names "([^"]*)" as not yet on the Drive$/, function (this
   claim(pending.length > 0, () => `the mount's log has no line naming "${path}" as not yet on the Drive.\n${this.whatHappened()}`);
 });
 
+/** The count each line of `output` gives of the uploads the mount has not finished, in order. */
+function pendingCounts(output: string): string[] {
+  return output.split("\n").flatMap((line) => line.match(/\b\d+ uploads? pending\b/)?.[0] ?? []);
+}
+
+Then(/^within (\d+) seconds the mount's latest count of pending uploads is "([^"]*)"$/, async function (this: DriveWorld, seconds: string, count: string) {
+  const mount = this.mount;
+  claim(mount, () => `the mount was never started.\n${this.whatHappened()}`);
+  await poll(() => pendingCounts(mount.process.output).at(-1) === count, { withinMs: Number(seconds) * 1000 });
+  const counts = pendingCounts(mount.process.output);
+  claim(
+    counts.at(-1) === count,
+    () => `after ${seconds} s the mount's latest count of pending uploads is ${counts.length ? `"${counts.at(-1)}"` : "missing: it logged none"}, not "${count}".\n${this.whatHappened()}`,
+  );
+});
+
 Then(/^the mount exits 0 on its own, and the folder is no longer mounted$/, function (this: DriveWorld) {
   const mount = this.mount;
   claim(mount, () => `the mount was never started.\n${this.whatHappened()}`);
