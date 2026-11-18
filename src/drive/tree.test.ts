@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { AbortError, NodeType, type MaybeMissingNode, type NodeEntity, type NodeOrUid, RateLimitedError } from '@protontech/drive-sdk';
 
+import { createTelemetry } from '../logger.ts';
 import { Backoff } from './backoff.ts';
 import { DriveTree, UPLOAD_STALL_MS } from './tree.ts';
 import type { ListingSnapshot } from './listing-cache.ts';
@@ -633,6 +634,115 @@ describe('DriveTree upload that moves no bytes', () => {
         expect(state.signal?.aborted).toBe(true);
         await expect(upload).rejects.toBeInstanceOf(AbortError);
         expect(timers.pending.size).toBe(0);
+    });
+
+    /** A logger that records each line as `level: message error`. */
+    function recordingLogger() {
+        const lines: string[] = [];
+        const at = (level: string) => (message: string, ...args: unknown[]) =>
+            void lines.push([`${level}: ${message}`, ...args.map(String)].join(' '));
+        return { lines, logger: { debug: at('debug'), info: at('info'), warn: at('warn'), error: at('error') } };
+    }
+
+    /**
+     * An SDK whose uploads log through pdm's telemetry as the real SDK does: each upload awaits
+     * its end and, when that fails, logs `Upload failed` with the error at error level. An
+     * upload fails with `AbortError` once its signal aborts, or with `fail(name, error)`.
+     */
+    function loggingSdk(telemetry: ReturnType<typeof createTelemetry>) {
+        const sdkLogger = telemetry.getLogger('upload');
+        const base = fakeSdk(nodes());
+        const uploads = new Map<string, { fail: (error: unknown) => void }>();
+        const uploader = (name: string, signal?: AbortSignal) => ({
+            uploadFromStream: async () => {
+                let fail!: (error: unknown) => void;
+                const done = new Promise<never>((_resolve, reject) => (fail = reject));
+                signal?.addEventListener('abort', () => fail(new AbortError('Request aborted')), { once: true });
+                uploads.set(name, { fail });
+                const completion = (async () => {
+                    try {
+                        return await done;
+                    } catch (error) {
+                        sdkLogger.error('Upload failed', error);
+                        throw error;
+                    }
+                })();
+                completion.catch(() => {});
+                return { pause() {}, resume() {}, completion: () => completion };
+            },
+        });
+        const sdk = {
+            ...base,
+            getFileUploader: async (_parent: NodeOrUid, name: string, _metadata: unknown, signal?: AbortSignal) =>
+                uploader(name, signal),
+        } as unknown as DriveSdk;
+        return { sdk, uploads };
+    }
+
+    async function startedUpload(uploads: Map<string, unknown>, name: string) {
+        for (let i = 0; i < 100 && !uploads.has(name); i++) await Promise.resolve();
+        expect(uploads.has(name)).toBe(true);
+    }
+
+    test('an upload the client aborts, as rclone does at stop, logs Upload failed at warn in the same words', async () => {
+        const { lines, logger } = recordingLogger();
+        const { sdk, uploads } = loggingSdk(createTelemetry(logger));
+        const tree = new DriveTree(sdk, QUIET, new Backoff());
+        const client = new AbortController();
+        const upload = tree.upload(['Photos'], 'beach.jpg', body(), { mediaType: 'image/jpeg' }, client.signal);
+        await startedUpload(uploads, 'beach.jpg');
+        client.abort();
+        await expect(upload).rejects.toBeInstanceOf(AbortError);
+        expect(lines).toEqual(['warn: [upload] Upload failed AbortError: Request aborted']);
+    });
+
+    test('an upload that pdm aborts at a stall still logs at error, and fails as a gateway timeout', async () => {
+        const { lines, logger } = recordingLogger();
+        const { sdk, uploads } = loggingSdk(createTelemetry(logger));
+        const timers = manualTimers();
+        const tree = new DriveTree(sdk, QUIET, new Backoff(), timers);
+        const upload = tree.upload(['Photos'], 'beach.jpg', body(), { mediaType: 'image/jpeg' }, new AbortController().signal);
+        await startedUpload(uploads, 'beach.jpg');
+        timers.fire();
+        await expect(upload).rejects.toMatchObject({ name: 'DriveError', status: 504 });
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+        expect(lines).toEqual(['error: [upload] Upload failed AbortError: Request aborted']);
+    });
+
+    test('a stall abort stays an error when the client aborts after the stall, before the SDK logs', async () => {
+        const { lines, logger } = recordingLogger();
+        const { sdk, uploads } = loggingSdk(createTelemetry(logger));
+        const timers = manualTimers();
+        const tree = new DriveTree(sdk, QUIET, new Backoff(), timers);
+        const client = new AbortController();
+        const upload = tree.upload(['Photos'], 'beach.jpg', body(), { mediaType: 'image/jpeg' }, client.signal);
+        await startedUpload(uploads, 'beach.jpg');
+        timers.fire();
+        // The client drops the connection after the 504, as Go's http client does.
+        client.abort();
+        await expect(upload).rejects.toMatchObject({ name: 'DriveError', status: 504 });
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+        expect(lines).toEqual(['error: [upload] Upload failed AbortError: Request aborted']);
+    });
+
+    test('two uploads at once keep apart: a client abort on one leaves the other failing at error', async () => {
+        const { lines, logger } = recordingLogger();
+        const { sdk, uploads } = loggingSdk(createTelemetry(logger));
+        const tree = new DriveTree(sdk, QUIET, new Backoff());
+        const client = new AbortController();
+        const aborted = tree.upload(['Photos'], 'beach.jpg', body(), { mediaType: 'image/jpeg' }, client.signal);
+        const failed = tree.upload(['Photos'], 'dunes.jpg', body(), { mediaType: 'image/jpeg' }, new AbortController().signal);
+        await startedUpload(uploads, 'beach.jpg');
+        await startedUpload(uploads, 'dunes.jpg');
+        client.abort();
+        uploads.get('dunes.jpg')!.fail(new AbortError('Request aborted'));
+        const [one, other] = await Promise.allSettled([aborted, failed]);
+        expect(one).toMatchObject({ status: 'rejected', reason: expect.any(AbortError) });
+        expect(other).toMatchObject({ status: 'rejected', reason: expect.any(AbortError) });
+        expect(lines).toEqual([
+            'warn: [upload] Upload failed AbortError: Request aborted',
+            'error: [upload] Upload failed AbortError: Request aborted',
+        ]);
     });
 });
 

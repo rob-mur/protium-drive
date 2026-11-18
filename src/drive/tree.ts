@@ -1,6 +1,7 @@
 import type { NodeEntity } from '@protontech/drive-sdk';
 
 import type { Logger } from '../../vendor/proton-drive-sdk-account';
+import { withUploadRequest } from '../logger';
 
 import { Backoff } from './backoff';
 import { openDownload, type ByteRange } from './download';
@@ -301,26 +302,38 @@ export class DriveTree {
         const node = await this.backoff.run(async () => {
             const stall = this.stallWatch(`${name} moved no bytes for ${UPLOAD_STALL_MS / 1000}s, so its upload was aborted`);
             const uploadSignal = signal ? AbortSignal.any([signal, stall.signal]) : stall.signal;
-            try {
-                const uploader = existing
-                    ? await this.sdk.getFileRevisionUploader(existing.uid, metadata, uploadSignal)
-                    : await this.sdk.getFileUploader(parent.uid, name, metadata, uploadSignal);
-                stall.restart();
-                // The race ends the PUT on a stall even if the SDK is slow to honour the abort.
-                const result = await Promise.race([
-                    (async () => {
-                        const controller = await uploader.uploadFromStream(body, [], () => stall.restart());
-                        return controller.completion();
-                    })(),
-                    stall.fired,
-                ]);
-                stall.stop();
-                return await this.sdk.getNode(result.nodeUid);
-            } catch (error: unknown) {
-                throw stall.signal.aborted ? stall.signal.reason : error;
-            } finally {
-                stall.stop();
-            }
+            // The SDK logs an upload the client dropped as an error. This signal aborts only when the
+            // client aborts before a stall does, so the telemetry log can tell a client abort from a
+            // stall or a real failure, even when the client goes away after the 504.
+            const clientFirst = new AbortController();
+            const onClientAbort = () => {
+                if (!stall.signal.aborted) clientFirst.abort();
+            };
+            if (signal?.aborted) clientFirst.abort();
+            signal?.addEventListener('abort', onClientAbort, { once: true });
+            return withUploadRequest(clientFirst.signal, async () => {
+                try {
+                    const uploader = existing
+                        ? await this.sdk.getFileRevisionUploader(existing.uid, metadata, uploadSignal)
+                        : await this.sdk.getFileUploader(parent.uid, name, metadata, uploadSignal);
+                    stall.restart();
+                    // The race ends the PUT on a stall even if the SDK is slow to honour the abort.
+                    const result = await Promise.race([
+                        (async () => {
+                            const controller = await uploader.uploadFromStream(body, [], () => stall.restart());
+                            return controller.completion();
+                        })(),
+                        stall.fired,
+                    ]);
+                    stall.stop();
+                    return await this.sdk.getNode(result.nodeUid);
+                } catch (error: unknown) {
+                    throw stall.signal.aborted ? stall.signal.reason : error;
+                } finally {
+                    stall.stop();
+                    signal?.removeEventListener('abort', onClientAbort);
+                }
+            });
         });
         const entry = toEntry(node as NodeEntity) as Entry;
         // A loaded listing takes the new entry in place, so a run of uploads into one

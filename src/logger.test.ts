@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { AbortError } from '@protontech/drive-sdk';
 
-import { createLogger, logLevel } from './logger.ts';
+import { createLogger, createTelemetry, logLevel, withUploadRequest } from './logger.ts';
 
 let restore: (() => void) | undefined;
 
@@ -75,5 +76,85 @@ describe('logLevel', () => {
             expect(level).toContain(names);
             expect(level).toContain('debug, info, warn or error');
         }
+    });
+});
+
+describe('createTelemetry', () => {
+    /** A logger that records each line as `level: message error`. */
+    function recordingLogger() {
+        const lines: string[] = [];
+        const at = (level: string) => (message: string, ...args: unknown[]) =>
+            void lines.push([`${level}: ${message}`, ...args.map(String)].join(' '));
+        return { lines, logger: { debug: at('debug'), info: at('info'), warn: at('warn'), error: at('error') } };
+    }
+
+    const aborted = () => {
+        const client = new AbortController();
+        client.abort();
+        return client.signal;
+    };
+
+    test('an AbortError from an upload whose client request aborted is a warning, in the same words', async () => {
+        const { lines, logger } = recordingLogger();
+        const sdk = createTelemetry(logger).getLogger('upload');
+        await withUploadRequest(aborted(), async () => {
+            await Promise.resolve();
+            sdk.error('Upload failed', new AbortError('Request aborted'));
+        });
+        expect(lines).toEqual(['warn: [upload] Upload failed AbortError: Request aborted']);
+    });
+
+    test('an AbortError from an upload whose client request did not abort, as at a stall, is an error', async () => {
+        const { lines, logger } = recordingLogger();
+        const sdk = createTelemetry(logger).getLogger('upload');
+        await withUploadRequest(new AbortController().signal, async () => {
+            sdk.error('Upload failed', new AbortError('Request aborted'));
+        });
+        expect(lines).toEqual(['error: [upload] Upload failed AbortError: Request aborted']);
+    });
+
+    test('a failure that is not an abort is an error, even when the client request aborted', async () => {
+        const { lines, logger } = recordingLogger();
+        const sdk = createTelemetry(logger).getLogger('upload');
+        await withUploadRequest(aborted(), async () => {
+            sdk.error('Upload failed', new Error('Proton API error'));
+        });
+        expect(lines).toEqual(['error: [upload] Upload failed Error: Proton API error']);
+    });
+
+    test('an AbortError outside an upload, or in an upload with no client request, is an error', async () => {
+        const { lines, logger } = recordingLogger();
+        const sdk = createTelemetry(logger).getLogger('upload');
+        sdk.error('Upload failed', new AbortError('Request aborted'));
+        await withUploadRequest(undefined, async () => {
+            sdk.error('Upload failed', new AbortError('Request aborted'));
+        });
+        expect(lines).toEqual([
+            'error: [upload] Upload failed AbortError: Request aborted',
+            'error: [upload] Upload failed AbortError: Request aborted',
+        ]);
+    });
+
+    test('two uploads at once keep apart: only the one whose client aborted logs a warning', async () => {
+        const { lines, logger } = recordingLogger();
+        const sdk = createTelemetry(logger).getLogger('upload');
+        const client = new AbortController();
+        let failBoth!: () => void;
+        const together = new Promise<void>((resolve) => (failBoth = resolve));
+        const one = withUploadRequest(client.signal, async () => {
+            await together;
+            sdk.error('Upload failed', new AbortError('one'));
+        });
+        const other = withUploadRequest(new AbortController().signal, async () => {
+            await together;
+            sdk.error('Upload failed', new AbortError('other'));
+        });
+        client.abort();
+        failBoth();
+        await Promise.all([one, other]);
+        expect(lines.sort()).toEqual([
+            'error: [upload] Upload failed AbortError: other',
+            'warn: [upload] Upload failed AbortError: one',
+        ]);
     });
 });
