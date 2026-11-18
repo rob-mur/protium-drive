@@ -21,6 +21,7 @@ import { removeKeyCache } from './proton/key-cache.ts';
 import { systemKeyring, type Keyring } from './proton/keyring.ts';
 import { cacheSettings, DEFAULT_CACHE, mountCommand, mountDeps } from './mount.ts';
 import { serveCommand, DEFAULT_HOST, DEFAULT_PORT } from './serve.ts';
+import { readCredentialFile } from './credential-file.ts';
 import { APP_VERSION, VERSION, buildRevision } from './version.ts';
 
 export { THIRD_PARTY_NOTICE };
@@ -32,7 +33,8 @@ Usage:
   proton-drive-mount auth login [--state-dir DIR] [--fake-drive DIR]
   proton-drive-mount auth status [--state-dir DIR]
   proton-drive-mount auth logout [--state-dir DIR]
-  proton-drive-mount serve [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--root PATH] [--state-dir DIR] [--fake-drive DIR]
+  proton-drive-mount serve [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--credential-file PATH] [--root PATH]
+                     [--state-dir DIR] [--fake-drive DIR]
   proton-drive-mount mount MOUNTPOINT [--dir-cache-time DURATION] [--vfs-cache-max-size SIZE] [--cache-dir DIR]
                      [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--root PATH] [--state-dir DIR] [--fake-drive DIR]
   proton-drive-mount migrate-node-keys FOLDER [--dry-run] [--state-dir DIR] [--fake-drive DIR]
@@ -47,10 +49,16 @@ Options:
                     Default: $XDG_STATE_HOME/proton-drive-mount (~/.local/state/proton-drive-mount).
   --fake-drive DIR  Use the fake drive kept in DIR instead of Proton. Nothing reaches Proton.
   --host HOST       Address for serve to listen on. Default: ${DEFAULT_HOST}. The serve answers only
-                    requests that name localhost, 127.0.0.1, ::1 or HOST. serve has no password, so
-                    keep it on loopback; mount also gives rclone a fresh credential each run and
-                    refuses every request without it.
+                    requests that name localhost, 127.0.0.1, ::1 or HOST. Without
+                    --credential-file, serve has no password, so keep it on loopback; mount gives
+                    rclone a fresh credential each run and refuses every request without it.
   --port PORT       Port for serve to listen on. Default: ${DEFAULT_PORT}.
+  --credential-file PATH
+                    serve refuses (401) every request that does not carry
+                    "Authorization: Bearer TOKEN", where TOKEN is the content of PATH with the
+                    whitespace around it trimmed. Give it on a computer that other users share.
+                    The token stays off the command line. serve exits 1 when PATH is missing,
+                    empty, or open to group or other (chmod 600 PATH). mount ignores it.
   MOUNTPOINT        mount runs the serve and rclone mount, with the tested settings, and mounts
                     the Drive there. SIGINT or SIGTERM stops both and unmounts. mount creates
                     a MOUNTPOINT that does not exist and unmounts one a killed mount left. It
@@ -198,6 +206,7 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
             'dir-cache-time': { type: 'string' },
             'vfs-cache-max-size': { type: 'string' },
             'cache-dir': { type: 'string' },
+            'credential-file': { type: 'string' },
             'dry-run': { type: 'boolean' },
             'log-level': { type: 'string' },
             help: { type: 'boolean', short: 'h' },
@@ -254,6 +263,14 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
         if (!Number.isInteger(port) || port < 0 || port > 65535) {
             return { code: 2, stdout: '', stderr: `Bad --port ${values.port}\n` };
         }
+        let credential: string | undefined;
+        if (values['credential-file'] !== undefined) {
+            try {
+                credential = readCredentialFile(values['credential-file']);
+            } catch (error: unknown) {
+                return { code: 1, stdout: '', stderr: `${(error as Error).message}\n` };
+            }
+        }
         const code = await serveCommand({
             stateDir: resolveStateDir(values['state-dir'], env),
             host: values.host ?? DEFAULT_HOST,
@@ -262,6 +279,7 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
             fakeDriveDir: values['fake-drive'],
             root: values.root,
             signal,
+            credential,
         });
         return { code, stdout: '', stderr: '' };
     }

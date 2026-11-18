@@ -38,8 +38,9 @@ export type ServeOptions = {
     /** Resolves when the serve should stop; SIGINT and SIGTERM resolve it. */
     signal?: AbortSignal;
     /**
-     * A per-run secret every request must carry as `Authorization: Bearer`. The mount sets it
-     * and hands it to rclone; a standalone serve has none and relies on the Host check alone.
+     * A secret every request must carry as `Authorization: Bearer`. The mount sets a fresh one
+     * each run and hands it to rclone; a standalone serve takes it from `--credential-file`, and
+     * without one relies on the Host check alone.
      */
     credential?: string;
     /** Called once the server listens, with the URL it answers on. */

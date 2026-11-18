@@ -6,7 +6,7 @@ import type { WebDavHandler } from './handler';
 
 export const MISDIRECTED =
     'This serve answers only to localhost, 127.0.0.1, ::1 and its --host; the request named another host.';
-export const MISSING_CREDENTIAL = "The request lacks the mount's credential; only the mount's rclone may use this port.";
+export const MISSING_CREDENTIAL = "The request lacks this serve's credential.";
 
 /** The names that always reach this machine's loopback, whatever DNS says. */
 const LOOPBACK_NAMES = ['localhost', '127.0.0.1', '[::1]'];
@@ -36,7 +36,7 @@ export function guardAccess(handler: WebDavHandler, options: AccessOptions): Web
             return refusal(421, MISDIRECTED);
         }
         if (expected && !timingSafeEqual(digest(request.headers.get('authorization') ?? ''), expected)) {
-            options.logger.warn(`${what} refused: no mount credential`);
+            options.logger.warn(`${what} refused: no credential`);
             return refusal(401, MISSING_CREDENTIAL, { 'WWW-Authenticate': 'Bearer' });
         }
         return handler(request);

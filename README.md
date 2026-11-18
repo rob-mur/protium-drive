@@ -234,8 +234,14 @@ systemctl --user restart proton-drive-mount
 - `mount` makes a new credential each run and gives it to rclone in rclone's environment, never
   on a command line. The port refuses every request without it, so another program or user on
   the computer cannot use the mount's port.
-- A standalone `serve` has no password; only the address checks protect it. Keep it on loopback,
-  and prefer `mount` on a computer that other users share.
+- A standalone `serve` has no password by default; only the address checks protect it. On a
+  computer that other users share, give it `--credential-file PATH`, or use `mount`. With that
+  option, the serve refuses (401) every request that does not carry
+  `Authorization: Bearer TOKEN`. TOKEN is the content of the file, with the whitespace around it
+  trimmed. The token never goes on the command line, where other users can read it with `ps`.
+  The serve does not start (exit 1) if the file is missing or empty, or if group or other can
+  use it. Make the file with `chmod 600`, and give your WebDAV client the same token, for
+  example rclone's `bearer_token`. `mount` ignores this option.
 - The session file `session.json` has mode 0600, in a state folder with mode 0700. Only you can
   read it. It holds the refresh token and the key password, so anyone who can read it has full
   access to your Proton account.

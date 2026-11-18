@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chmod as chmodAsync, rm as rmAsync } from 'node:fs/promises';
@@ -179,6 +179,83 @@ describe('serve dispatch', () => {
             }
         }
     });
+});
+
+describe('serve --credential-file', () => {
+    test('HELP names the option and says the token never goes on the command line', () => {
+        expect(HELP).toContain('serve [--host 127.0.0.1] [--port 7395] [--credential-file PATH]');
+        expect(HELP).toContain('--credential-file PATH');
+        expect(HELP).toContain('Authorization: Bearer');
+    });
+
+    test('a serve with a credential file answers only a request that carries its token', async () => {
+        const stateDir = mkdtempSync(join(tmpdir(), 'pdm-main-cred-state-XXXXXX'));
+        const driveDir = mkdtempSync(join(tmpdir(), 'pdm-main-cred-drive-XXXXXX'));
+        const credentialDir = mkdtempSync(join(tmpdir(), 'pdm-main-cred-XXXXXX'));
+        const credentialFile = join(credentialDir, 'credential');
+        writeFileSync(credentialFile, 'the-serve-token\n', { mode: 0o600 });
+        const stderrLines: string[] = [];
+        const realWrite = process.stderr.write;
+        process.stderr.write = ((chunk: string | Uint8Array) => {
+            stderrLines.push(String(chunk));
+            return realWrite.call(process.stderr, chunk);
+        }) as typeof process.stderr.write;
+        try {
+            await signInThroughMain(stateDir, driveDir, stderrLines);
+            const abort = new AbortController();
+            const serve = runCommand(
+                ['serve', '--state-dir', stateDir, '--fake-drive', driveDir, '--port', '0', '--credential-file', credentialFile],
+                {},
+                CONSOLE_OUTPUT_QUIET,
+                abort.signal,
+            );
+            const servingLine = await waitFor(stderrLines, 'Serving Proton Drive');
+            expect(servingLine).toBeString();
+            const url = servingLine!.match(/https?:\/\/\S+/)![0];
+            const statusWith = async (authorization?: string) =>
+                (await fetch(url, { method: 'PROPFIND', headers: { Depth: '0', ...(authorization ? { Authorization: authorization } : {}) } })).status;
+            expect(await statusWith()).toBe(401);
+            expect(await statusWith('Bearer not-the-serve-token')).toBe(401);
+            expect(await statusWith('Bearer the-serve-token')).toBe(207);
+            abort.abort();
+            expect((await serve).code).toBe(0);
+        } finally {
+            process.stderr.write = realWrite;
+            for (const dir of [stateDir, driveDir, credentialDir]) {
+                await chmodAsync(dir, 0o700).catch(() => {});
+                await rmAsync(dir, { recursive: true, force: true });
+            }
+        }
+    });
+
+    for (const [name, content, mode, says] of [
+        ['a missing file', undefined, 0o600, 'cannot be read: it does not exist.'],
+        ['an empty file', '\n', 0o600, 'is empty.'],
+        ['a file group can read', 'token', 0o640, 'has mode 0640: group or other can use it. Run "chmod 600'],
+        ['a file other users can read', 'token', 0o644, 'has mode 0644: group or other can use it. Run "chmod 600'],
+    ] as const) {
+        test(`${name} exits 1 with a clear error, before the serve takes the state lock or loads the session`, async () => {
+            const stateDir = mkdtempSync(join(tmpdir(), 'pdm-main-cred-state-XXXXXX'));
+            const credentialDir = mkdtempSync(join(tmpdir(), 'pdm-main-cred-XXXXXX'));
+            const credentialFile = join(credentialDir, 'credential');
+            if (content !== undefined) {
+                writeFileSync(credentialFile, content);
+                await chmodAsync(credentialFile, mode);
+            }
+            // A live holder of the state lock: a serve that went on to take it would exit 1 for that instead.
+            const release = await acquireStateLock(stateDir);
+            try {
+                const answer = await runCommand(['serve', '--state-dir', stateDir, '--port', '0', '--credential-file', credentialFile], {});
+                expect(answer.code).toBe(1);
+                expect(answer.stderr).toContain(`The credential file ${credentialFile} ${says}`);
+            } finally {
+                await release();
+                for (const dir of [stateDir, credentialDir]) {
+                    await rmAsync(dir, { recursive: true, force: true });
+                }
+            }
+        });
+    }
 });
 
 describe('mount dispatch', () => {
