@@ -397,6 +397,35 @@ describe('an upload that moves slowly', () => {
     });
 });
 
+describe('an upload that waits for its uploader', () => {
+    test('gets no uploader until its signal aborts, then fails with AbortError and starts no upload', async () => {
+        drive.add('Photos', { type: 'folder' });
+        faults.add({ kind: 'upload-wait', operation: 'getFileUploader', path: 'Photos' });
+        const abort = new AbortController();
+        const outcome = client
+            .getFileUploader(drive.nodeAt('Photos').uid, 'beach.jpg', { mediaType: 'image/jpeg', expectedSize: 12 }, abort.signal)
+            .then(() => 'uploader', (error: unknown) => error);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(await Promise.race([outcome, 'still waiting'])).toBe('still waiting');
+
+        abort.abort();
+        expect(await outcome).toBeInstanceOf(AbortError);
+        expect(client.calls().methods.uploadFromStream).toBeUndefined();
+        expect(() => drive.nodeAt('Photos/beach.jpg')).toThrow();
+        await upload('Photos', 'beach.jpg', 'sand and sea');
+    });
+
+    test('on an overwrite, it leaves the file as it was', async () => {
+        drive.add('Photos/beach.jpg', { type: 'file', content: bytes('sand and sea') });
+        faults.add({ kind: 'upload-wait', operation: 'getFileRevisionUploader', path: 'Photos/beach.jpg' });
+        const abort = new AbortController();
+        const waiting = client.getFileRevisionUploader(drive.nodeAt('Photos/beach.jpg').uid, { mediaType: 'text/plain', expectedSize: 13 }, abort.signal);
+        abort.abort();
+        await expect(waiting).rejects.toBeInstanceOf(AbortError);
+        expect(new TextDecoder().decode(drive.content('Photos/beach.jpg'))).toBe('sand and sea');
+    });
+});
+
 describe('every upload', () => {
     test('is counted when it starts, and reports its bytes as progress', async () => {
         drive.add('Photos', { type: 'folder' });
@@ -420,6 +449,7 @@ describe('setting a fault', () => {
             { kind: 'upload-part-way', operation: 'getFileDownloader', path: 'a' },
             { kind: 'upload-stall', operation: 'getFileDownloader', path: 'a' },
             { kind: 'upload-slow', operation: 'createFolder', path: 'a' },
+            { kind: 'upload-wait', operation: 'getFileDownloader', path: 'a' },
             null,
         ];
         for (const fault of bad) expect(() => faults.add(fault as Fault)).toThrow(FaultError);

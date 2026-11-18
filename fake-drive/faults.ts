@@ -26,12 +26,15 @@
  * - `upload-slow` (`getFileUploader`, `getFileRevisionUploader`, under the clock only): the upload
  *   reports a tenth of the content as progress at each minute of the clock, and commits after the
  *   tenth minute. It fails with `AbortError` if its signal aborts first.
+ * - `upload-wait` (`getFileUploader`, `getFileRevisionUploader`): the call does not give the
+ *   uploader until its signal aborts, as when the SDK's upload queue is full, and then fails with
+ *   `AbortError`. Without a signal it never ends. The Drive keeps no part of the upload.
  */
 import { AbortError, ConnectionError, IntegrityError, NodeWithSameNameExistsValidationError, RateLimitedError, ServerError } from '@protontech/drive-sdk';
 
 import { NAME_TAKEN, type SdkSurface } from './drive.ts';
 
-export const FAULT_KINDS = ['rate-limited', 'server-error', 'unreachable', 'integrity', 'name-clash', 'upload-part-way', 'upload-stall', 'upload-slow'] as const;
+export const FAULT_KINDS = ['rate-limited', 'server-error', 'unreachable', 'integrity', 'name-clash', 'upload-part-way', 'upload-stall', 'upload-slow', 'upload-wait'] as const;
 export type FaultKind = (typeof FAULT_KINDS)[number];
 export type Operation = keyof SdkSurface;
 
@@ -65,6 +68,7 @@ const ONLY_ON: Partial<Record<FaultKind, readonly Operation[]>> = {
     'upload-part-way': ['getFileUploader', 'getFileRevisionUploader'],
     'upload-stall': ['getFileUploader', 'getFileRevisionUploader'],
     'upload-slow': ['getFileUploader', 'getFileRevisionUploader'],
+    'upload-wait': ['getFileUploader', 'getFileRevisionUploader'],
 };
 
 export class Faults {
@@ -105,6 +109,7 @@ export function faultError(kind: FaultKind): Error {
             return new ConnectionError('fake-drive: the upload failed part-way');
         case 'upload-stall':
         case 'upload-slow':
+        case 'upload-wait':
             return new AbortError('fake-drive: upload aborted');
     }
 }

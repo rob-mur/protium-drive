@@ -598,6 +598,7 @@ export class FakeDriveClient implements SdkSurface {
         this.count('getFileUploader');
         const parentUid = uidOf(parent);
         const fault = await this.enter('getFileUploader', ...this.created(parentUid, name));
+        await waitIfHeld(fault, signal);
         validateName(name);
         this.drive.checkFreeName(parentUid, name);
         return uploader(metadata, signal, (content) => this.drive.createFile(parentUid, name, content), this.upload(fault));
@@ -607,6 +608,7 @@ export class FakeDriveClient implements SdkSurface {
         this.count('getFileRevisionUploader');
         const nodeUid = uidOf(uid);
         const fault = await this.enter('getFileRevisionUploader', this.drive.pathOfUid(nodeUid));
+        await waitIfHeld(fault, signal);
         this.requireRecord(nodeUid);
         return uploader(metadata, signal, (content) => this.drive.createRevision(nodeUid, content), this.upload(fault));
     }
@@ -836,7 +838,7 @@ class FakeScheduler {
 }
 
 /** The fault kinds a call acts on itself, rather than throwing their error when it is entered. */
-const ACTED_ON: ReadonlySet<FaultKind> = new Set(['integrity', 'upload-part-way', 'upload-stall', 'upload-slow']);
+const ACTED_ON: ReadonlySet<FaultKind> = new Set(['integrity', 'upload-part-way', 'upload-stall', 'upload-slow', 'upload-wait']);
 
 /** How many parts an `upload-slow` fault reports, one each `SLOW_UPLOAD_STEP_MS` of the clock. */
 export const SLOW_UPLOAD_STEPS = 10;
@@ -929,6 +931,13 @@ function slowly(clock: Clock | undefined, signal: AbortSignal | undefined): { ne
     }, { once: true });
     let read = 0;
     return { next: () => ticks[read++] ?? Promise.reject(new AbortError('fake-drive: upload aborted')) };
+}
+
+/** Under an `upload-wait` fault, gives no uploader until `signal` aborts, then fails with `AbortError`. */
+async function waitIfHeld(fault: Fault | undefined, signal: AbortSignal | undefined): Promise<void> {
+    if (fault?.kind !== 'upload-wait') return;
+    await untilAborted(signal);
+    throw faultError('upload-wait');
 }
 
 /** Resolves once `signal` aborts; never, without one. */

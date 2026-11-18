@@ -37,6 +37,14 @@ Feature: Drive failures reach the client as HTTP statuses
     And the user writes "sand and sea" to "Photos/beach.jpg"
     Then the first write fails as a gateway timeout, and the second one succeeds
 
+  @id:an-upload-that-waits-too-long-to-start-reaches-the-user-as-a-gateway-timeout
+  Scenario: An upload that waits too long to start reaches the user as a gateway timeout
+    Given a Drive whose My files holds the folder "Photos"
+    And the next upload into "Photos" waits for its turn to start
+    When the user writes "sand and sea" to "Photos/beach.jpg" while it waits 10 minutes to start
+    And the user writes "sand and sea" to "Photos/beach.jpg"
+    Then the first write fails as a gateway timeout, and the second one succeeds
+
   @id:a-slow-upload-that-still-moves-bytes-is-not-aborted
   Scenario: A slow upload that still moves bytes is not aborted
     Given a Drive whose My files holds the folder "Photos"

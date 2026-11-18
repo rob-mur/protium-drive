@@ -42,6 +42,10 @@ When(/^the user writes "([^"]*)" to "([^"]*)" while (\d+) minutes pass$/, async 
   await this.writeWhileTimePasses(path, content, Number(minutes) * 60);
 });
 
+When(/^the user writes "([^"]*)" to "([^"]*)" while it waits (\d+) minutes to start$/, async function (this: DriveWorld, content: string, path: string, minutes: string) {
+  await this.writeWhileWaitingToStart(path, content, Number(minutes) * 60);
+});
+
 When(/^the user writes "([^"]*)" to "([^"]*)"$/, async function (this: DriveWorld, content: string, path: string) {
   await this.write(path, content);
 });
