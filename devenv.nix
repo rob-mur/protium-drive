@@ -21,7 +21,8 @@
     # A consumer builds the flake's own package at the deployed rev and runs it.
     consumerKind = "flake-package";
 
-    records.prefix = "europe-west1-docker.pkg.dev/ai-ci-pipeline/proton-drive-mount";
+    records.prefix = "europe-west1-docker.pkg.dev/ai-ci-pipeline";
+    records.namespace = "proton-drive-mount";
 
     frozenSuite = {
       command = [ "bun" "spec/node_modules/.bin/cucumber-js" "--config" "spec/cucumber.mjs" ];
