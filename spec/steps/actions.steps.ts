@@ -18,6 +18,14 @@ When(/^the user tries to sign in again$/, async function (this: DriveWorld) {
   await this.trySigningIn();
 });
 
+When(/^the user signs in after the first sign-in link times out$/, async function (this: DriveWorld) {
+  await this.signInThroughTimeouts(1, true);
+});
+
+When(/^the user starts signing in, and (\d+) sign-in links time out unapproved$/, async function (this: DriveWorld, links: string) {
+  await this.signInThroughTimeouts(Number(links), false);
+});
+
 // --- the serve ------------------------------------------------------------------------------
 
 When(/^the user starts the serve$/, async function (this: DriveWorld) {

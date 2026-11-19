@@ -5,8 +5,10 @@ import { join } from 'node:path';
 
 import { ServerError } from '@protontech/drive-sdk';
 
+import { FORK_INITIAL_DELAY_MS, FORK_MAX_POLL_TIME_MS } from '../vendor/proton-drive-sdk-account/authWeb.ts';
 import type { SessionCredentials, SessionInfo } from '../vendor/proton-drive-sdk-account/sessionCredentials.ts';
 import { FAKE_ACCOUNT_HOST, FakeAccount, KEY_PASSWORD } from './account.ts';
+import { FakeClock } from './clock.ts';
 import { FakeDrive, FakeDriveClient } from './drive.ts';
 
 /**
@@ -134,6 +136,73 @@ describe('the session-fork sign-in', () => {
         const done = auth.authViaWeb(() => abort.abort(new Error('stopped')), abort.signal);
         await expect(done).rejects.toThrow('stopped');
         expect(account.approve()).toBe(0);
+    });
+
+    describe('on a clock, as the module waits for Proton', () => {
+        /** The module's own wait for one link: its first delay, then its polls. */
+        const LINK_LIFETIME_MS = FORK_INITIAL_DELAY_MS + FORK_MAX_POLL_TIME_MS;
+
+        async function startOn(clock: FakeClock, signal?: AbortSignal) {
+            const account = FakeAccount.open(dir, clock);
+            const { auth } = await account.initAccount({ authClientId: 'external-drive', credentials: new TestCredentials() });
+            const urls: string[] = [];
+            let outcome: unknown = 'waiting';
+            const done = auth.authViaWeb((url) => void urls.push(url), signal);
+            done.then(
+                () => (outcome = 'signed in'),
+                (error: unknown) => (outcome = error),
+            );
+            while (urls.length === 0) await Bun.sleep(1);
+            return { account, auth, urls, done, outcome: () => outcome };
+        }
+
+        test("a link no one approves times out with the module's error once the module's wait ends", async () => {
+            const clock = new FakeClock(0);
+            const { account, outcome } = await startOn(clock);
+
+            await clock.advance(LINK_LIFETIME_MS - 1);
+            expect(outcome()).toBe('waiting');
+            expect(account.report().signIns).toMatchObject({ started: 1, pending: 1 });
+
+            await clock.advance(1);
+            await Bun.sleep(1);
+            expect(outcome()).toMatchObject({ message: 'Authentication timed out' });
+            expect(account.report().signIns).toEqual({ started: 1, approved: 0, pending: 0 });
+            expect(account.approve()).toBe(0);
+            expect(clock.pending()).toEqual([]);
+        });
+
+        test('a new sign-in after a timeout gives a new link, and its approval signs the user in', async () => {
+            const clock = new FakeClock(0);
+            const first = await startOn(clock);
+            await clock.advance(LINK_LIFETIME_MS);
+            await expect(first.done).rejects.toThrow('Authentication timed out');
+
+            const urls: string[] = [];
+            const again = first.auth.authViaWeb((url) => void urls.push(url));
+            while (urls.length === 0) await Bun.sleep(1);
+            expect(urls[0]).not.toBe(first.urls[0]);
+            expect(first.account.approve()).toBe(1);
+            await again;
+            expect(first.account.report().signIns).toEqual({ started: 2, approved: 1, pending: 0 });
+        });
+
+        test('an approved link leaves no timer on the clock', async () => {
+            const clock = new FakeClock(0);
+            const { account, done } = await startOn(clock);
+            expect(account.approve()).toBe(1);
+            await done;
+            expect(clock.pending()).toEqual([]);
+        });
+
+        test('an aborted sign-in leaves no timer on the clock', async () => {
+            const clock = new FakeClock(0);
+            const abort = new AbortController();
+            const { done } = await startOn(clock, abort.signal);
+            abort.abort(new Error('stopped'));
+            await expect(done).rejects.toThrow('stopped');
+            expect(clock.pending()).toEqual([]);
+        });
     });
 
     test('a sign-in with a signal that already aborted rejects at once, and gives no URL', async () => {

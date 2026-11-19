@@ -10,7 +10,8 @@
  *   returns `auth` (an `Auth`) and `apiClient` (the refresh of an `ApiClient`).
  * - `auth.authViaWeb` is the session-fork sign-in: it gives the product a sign-in URL, then waits
  *   until the control channel approves (`POST /account/approve`). The session it issues holds the
- *   refresh token `refresh-1`.
+ *   refresh token `refresh-1`. On the Receive arm's clock, a link no one approves times out as the
+ *   module's does: after the module's own wait, with the module's error.
  * - `apiClient.refreshSessionIfPossible` refreshes as the module does. Each refresh rotates the
  *   refresh token (`refresh-1`, then `refresh-2`, ...) and records the token it used. The account
  *   refuses a token that was used already, as Proton does, and refuses the next refresh when the
@@ -29,9 +30,10 @@ import { ServerError } from '@protontech/drive-sdk';
 
 import type { ApiClient } from '../vendor/proton-drive-sdk-account/apiClient.ts';
 import type { Auth } from '../vendor/proton-drive-sdk-account/auth.ts';
-import { generateSignInUrl } from '../vendor/proton-drive-sdk-account/authWeb.ts';
+import { FORK_INITIAL_DELAY_MS, FORK_MAX_POLL_TIME_MS, generateSignInUrl } from '../vendor/proton-drive-sdk-account/authWeb.ts';
 import type { InitAccountOptions } from '../vendor/proton-drive-sdk-account/index.ts';
 import type { SessionCredentials } from '../vendor/proton-drive-sdk-account/sessionCredentials.ts';
+import type { Clock, TimerHandle } from './clock.ts';
 import type { DriveAuthorizer } from './drive.ts';
 import { StateFile } from './state-file.ts';
 
@@ -75,10 +77,16 @@ export class FakeAccount implements DriveAuthorizer {
     private apiClient?: ApiClientSurface;
     private readonly waiting = new Set<() => void>();
 
-    private constructor(private readonly state: StateFile<AccountState>) {}
+    private constructor(
+        private readonly state: StateFile<AccountState>,
+        private readonly clock?: Clock,
+    ) {}
 
-    /** Opens the account kept in `dir`, and creates one with no session there if it holds none. */
-    static open(dir: string): FakeAccount {
+    /**
+     * Opens the account kept in `dir`, and creates one with no session there if it holds none.
+     * With a `clock`, a sign-in link times out on it; without one, a link waits until approved.
+     */
+    static open(dir: string, clock?: Clock): FakeAccount {
         return new FakeAccount(
             new StateFile<AccountState>(join(dir, 'account.json'), () => ({
                 format: 1,
@@ -88,6 +96,7 @@ export class FakeAccount implements DriveAuthorizer {
                 signIns: { started: 0, approved: 0 },
                 refreshes: [],
             })),
+            clock,
         );
     }
 
@@ -206,24 +215,34 @@ export class FakeAccount implements DriveAuthorizer {
         return issued;
     }
 
-    /** Waits in `waiting` until approved or aborted. `cancel` takes the wait out with neither. */
+    /**
+     * Waits in `waiting` until approved, aborted or, on the clock, timed out as the module times
+     * out. `cancel` takes the wait out with none of them.
+     */
     private waitForApproval(signal?: AbortSignal): { approved: Promise<void>; cancel: () => void } {
         let cancel = () => {};
         const approved = new Promise<void>((resolve, reject) => {
-            const approve = () => {
+            let timer: TimerHandle | undefined;
+            const end = () => {
+                this.waiting.delete(approve);
                 signal?.removeEventListener('abort', abort);
+                this.clock?.clearTimeout(timer);
+            };
+            const approve = () => {
+                end();
                 resolve();
             };
             const abort = () => {
-                this.waiting.delete(approve);
+                end();
                 reject(signal?.reason ?? new Error('Aborted'));
             };
-            cancel = () => {
-                this.waiting.delete(approve);
-                signal?.removeEventListener('abort', abort);
-            };
+            cancel = end;
             this.waiting.add(approve);
             signal?.addEventListener('abort', abort, { once: true });
+            timer = this.clock?.setTimeout(() => {
+                end();
+                reject(new Error('Authentication timed out'));
+            }, FORK_INITIAL_DELAY_MS + FORK_MAX_POLL_TIME_MS);
         });
         return { approved, cancel };
     }

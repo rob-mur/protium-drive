@@ -39,6 +39,24 @@ Then(
   },
 );
 
+/** The distinct sign-in URLs a sign-in printed, in the order it printed them. */
+function signInLinks(output: string): string[] {
+  return [...new Set(output.match(/https:\/\/\S+/g) ?? [])];
+}
+
+Then(
+  /^signing in prints (\d+) different sign-in links, exits (\d+), and the state directory (holds|holds no) "([^"]*)"$/,
+  function (this: DriveWorld, links: string, code: string, holds: string, file: string) {
+    const signIn = this.signIns.at(-1);
+    claim(signIn, () => `the user did not sign in.\n${this.whatHappened()}`);
+    const printed = signInLinks(signIn.output);
+    claim(printed.length === Number(links), () => `signing in printed ${printed.length} different sign-in links, not ${links}.\n${this.whatHappened()}`);
+    claim(signIn.ending?.code === Number(code), () => `signing in exited ${signIn.ending?.code ?? signIn.ending?.signal ?? "not at all"}, not ${code}.\n${this.whatHappened()}`);
+    const present = existsSync(`${this.dirs.state}/${file}`);
+    claim(present === (holds === "holds"), () => `the state directory ${present ? "holds" : "holds no"} "${file}".\n${this.whatHappened()}`);
+  },
+);
+
 // --- the needs-login status and the state lock --------------------------------------------------
 
 Then(/^the serve exits (\d+) saying "(.*)"$/, async function (this: DriveWorld, code: string, text: string) {

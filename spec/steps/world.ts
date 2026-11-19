@@ -30,6 +30,11 @@ setDefaultTimeout(300_000);
 
 /** How long a process of the binary gets to start, or to end on its own. */
 const START_MS = 30_000;
+/**
+ * How long one sign-in link waits for an approval before it times out: the account module's
+ * first 5 s delay, then its 10 minutes of polls (vendor/proton-drive-sdk-account/authWeb.ts).
+ */
+const SIGN_IN_LINK_LIFETIME_S = 5 + 10 * 60;
 /** How long the binary gets to mount the Drive. */
 const MOUNT_MS = 60_000;
 /** How long a Then waits for the Drive to show a write the serve has answered. */
@@ -238,6 +243,43 @@ export class DriveWorld extends World {
       await running.stop();
     }
     return running;
+  }
+
+  /**
+   * `auth login`, through `timeouts` sign-in links that time out on the Receive arm's clock while
+   * no one approves them. With `approve`, the user then approves the next link; without, the
+   * sign-in gets START_MS to end on its own.
+   */
+  async signInThroughTimeouts(timeouts: number, approve: boolean): Promise<void> {
+    await this.arrange();
+    const running = this.start(this.signInArgs());
+    this.signIns.push(running);
+    await running.waitFor((p) => Control.fromOutput(p.output) !== undefined, START_MS);
+    const control = Control.fromOutput(running.output);
+    if (!control) {
+      this.trouble(`signing in printed no control channel: ${running.describe()}`);
+      if (running.running) await running.stop();
+      return;
+    }
+    const linkWaits = async (link: number) => {
+      const waits = await running.waitFor(async () => {
+        const signIns = (await quietly(() => control.account()))?.signIns;
+        return !!signIns && signIns.started >= link && signIns.pending >= 1;
+      }, START_MS);
+      if (!waits) this.trouble(`sign-in link ${link} did not wait for an approval: ${running.describe()}`);
+      return waits;
+    };
+    for (let link = 1; link <= timeouts; link++) {
+      if (!(await linkWaits(link))) break;
+      await this.attempt(`letting sign-in link ${link} time out`, () => control.advanceClock(SIGN_IN_LINK_LIFETIME_S));
+    }
+    if (approve && running.running && (await linkWaits(timeouts + 1))) {
+      await this.attempt(`approving sign-in link ${timeouts + 1}`, () => control.approveSignIn());
+    }
+    if (!(await running.waitForEnd(START_MS))) {
+      this.trouble(`signing in did not end within ${START_MS / 1000} s`);
+      await running.stop();
+    }
   }
 
   /** Starts `auth login`, keeps what it prints until it prints a URL, and stops it there. */

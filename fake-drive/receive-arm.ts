@@ -45,8 +45,8 @@ export type ReceiveArmOptions = {
 export async function startReceiveArm(dir: string, options: ReceiveArmOptions = {}): Promise<ReceiveArm> {
     const print = options.print ?? ((line: string) => process.stderr.write(`${line}\n`));
     const drive = FakeDrive.open(dir);
-    const account = FakeAccount.open(dir);
     const clock = new FakeClock();
+    const account = FakeAccount.open(dir, clock);
     const faults = new Faults();
     const client = new FakeDriveClient(drive, { account, clock, faults });
     const control: ControlChannel = startControlChannel(drive, client, { account, clock, faults });

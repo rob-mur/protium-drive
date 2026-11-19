@@ -272,6 +272,22 @@
       "expected_status": "green"
     },
     {
+      "id": "a-sign-in-link-that-times-out-is-replaced-by-a-new-one",
+      "path": "spec/features/session-status.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^signing in prints (\\d+) different sign-in links, exits (\\d+), and the state directory (holds|holds no) \"([^\"]*)\"$"
+      ]
+    },
+    {
+      "id": "signing-in-stops-after-three-sign-in-links-time-out",
+      "path": "spec/features/session-status.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^signing in prints (\\d+) different sign-in links, exits (\\d+), and the state directory (holds|holds no) \"([^\"]*)\"$"
+      ]
+    },
+    {
       "id": "the-serve-listens-only-on-loopback-by-default",
       "path": "spec/features/local-access.feature",
       "expected_status": "green"
