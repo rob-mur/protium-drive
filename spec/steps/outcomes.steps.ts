@@ -44,6 +44,15 @@ Then(/^the first write fails as a gateway timeout, and the second one succeeds$/
   claim(second.outcome.exitCode === 0, () => `the second write of "${second.path}" failed:\n${describe(second.outcome)}\n${this.whatHappened()}`);
 });
 
+Then(/^the write to "([^"]*)" fails as a gateway timeout, and the write to "([^"]*)" succeeds$/, function (this: DriveWorld, failedPath: string, path: string) {
+  const writes = this.actionsOf("write");
+  const failed = writes.find((write) => write.path === failedPath);
+  const succeeded = writes.find((write) => write.path === path);
+  claim(failed && succeeded, () => `the writes of "${failedPath}" and "${path}" were not both recorded.\n${this.whatHappened()}`);
+  refusedWith(this, failed, "PUT", 504);
+  claim(succeeded.outcome.exitCode === 0, () => `the write of "${path}" failed:\n${describe(succeeded.outcome)}\n${this.whatHappened()}`);
+});
+
 Then(/^the write fails as a conflict$/, function (this: DriveWorld) {
   refusedWith(this, last(this, "write"), "PUT", 409);
 });

@@ -45,6 +45,14 @@ Feature: Drive failures reach the client as HTTP statuses
     And the user writes "sand and sea" to "Photos/beach.jpg"
     Then the first write fails as a gateway timeout, and the second one succeeds
 
+  @id:an-upload-that-waits-behind-a-stalled-upload-starts-once-the-stalled-one-is-aborted
+  Scenario: An upload that waits behind a stalled upload starts once the stalled one is aborted
+    Given a Drive whose My files holds the folder "Photos"
+    And the next upload into "Photos/dunes.jpg" waits until another upload ends
+    And the next upload into "Photos/beach.jpg" stops moving bytes
+    When the user writes "sand dunes" to "Photos/dunes.jpg", then "sand and sea" to "Photos/beach.jpg", while 10 minutes pass
+    Then the write to "Photos/beach.jpg" fails as a gateway timeout, and the write to "Photos/dunes.jpg" succeeds
+
   @id:a-slow-upload-that-still-moves-bytes-is-not-aborted
   Scenario: A slow upload that still moves bytes is not aborted
     Given a Drive whose My files holds the folder "Photos"

@@ -57,6 +57,14 @@
       "expected_status": "green"
     },
     {
+      "id": "an-upload-that-waits-behind-a-stalled-upload-starts-once-the-stalled-one-is-aborted",
+      "path": "spec/features/error-mapping.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the write to \"([^\"]*)\" fails as a gateway timeout, and the write to \"([^\"]*)\" succeeds$"
+      ]
+    },
+    {
       "id": "binary-reports-its-revision",
       "path": "spec/features/identity.feature",
       "expected_status": "green"

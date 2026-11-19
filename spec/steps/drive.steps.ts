@@ -64,6 +64,10 @@ Given(/^the next upload into "([^"]*)" moves a tenth of its bytes each minute$/,
   fault(this, "upload-slow", "getFileUploader", folder);
 });
 
+Given(/^the next upload into "([^"]*)" waits until another upload ends$/, function (this: DriveWorld, path: string) {
+  fault(this, "upload-queued", "getFileUploader", path);
+});
+
 Given(/^the next upload into "([^"]*)" waits for its turn to start$/, function (this: DriveWorld, folder: string) {
   fault(this, "upload-wait", "getFileUploader", folder);
 });

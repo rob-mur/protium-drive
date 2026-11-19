@@ -55,7 +55,7 @@ export interface AccountReport {
   refuseNextRefresh: boolean;
 }
 
-export type FaultKind = "rate-limited" | "server-error" | "unreachable" | "integrity" | "name-clash" | "upload-part-way" | "upload-stall" | "upload-slow" | "upload-wait";
+export type FaultKind = "rate-limited" | "server-error" | "unreachable" | "integrity" | "name-clash" | "upload-part-way" | "upload-stall" | "upload-slow" | "upload-wait" | "upload-queued";
 
 /** A fault the next matching SDK call meets (fake-drive/faults.ts). */
 export interface Fault {

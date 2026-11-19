@@ -500,6 +500,41 @@ export class DriveWorld extends World {
   }
 
   /**
+   * Writes `waitingText` to `waitingPath` and waits until the serve has asked the Drive for its
+   * uploader; then writes `text` to `path` and waits until that upload has started. It moves the
+   * Drive's clock on by `seconds`, then gives both writes SETTLE_MS to end, and records them in
+   * that order.
+   */
+  async writeBehindWhileTimePasses(waitingPath: string, waitingText: string, path: string, text: string, seconds: number): Promise<void> {
+    const serving = await this.ensureServing();
+    const callsBefore = await this.calls(serving);
+    const count = (method: string) => (calls?: CallCounts) => calls?.methods[method] ?? 0;
+    const start = async (target: string, content: string, method: string, what: string) => {
+      const before = await this.calls(serving);
+      const writing = this.client(serving.url).write(target, new TextEncoder().encode(content));
+      let ended = false;
+      void writing.then(() => (ended = true));
+      const reached = await poll(async () => ended || count(method)(await this.calls(serving)) > count(method)(before), { withinMs: START_MS }).then(
+        () => true,
+        () => false,
+      );
+      if (!reached) this.trouble(`the upload of ${target} did not ${what} in ${START_MS / 1000} s`);
+      return { writing };
+    };
+    const { writing: waiting } = await start(waitingPath, waitingText, "getFileUploader", "ask for an uploader");
+    const { writing } = await start(path, text, "uploadFromStream", "start");
+    await this.pass(seconds);
+    const ending = (target: string, write: Promise<Outcome>) => {
+      const unended: Outcome = { command: `writing ${target}`, exitCode: -1, stdout: new Uint8Array(), stderr: `the write did not end ${SETTLE_MS / 1000} s after the clock moved`, exchanges: [], timedOut: true };
+      return Promise.race([write, new Promise<Outcome>((resolve) => setTimeout(() => resolve(unended), SETTLE_MS))]);
+    };
+    const [waitingOutcome, outcome] = await Promise.all([ending(waitingPath, waiting), ending(path, writing)]);
+    const callsAfter = await this.calls(serving);
+    this.actions.push({ kind: "write", path: waitingPath, outcome: waitingOutcome, callsBefore, callsAfter });
+    this.actions.push({ kind: "write", path, outcome, callsBefore, callsAfter });
+  }
+
+  /**
    * Writes `text` to `path`, waits until the serve has asked the Drive for an uploader, lets
    * `seconds` pass on the Drive's clock, then waits for the write to end.
    */

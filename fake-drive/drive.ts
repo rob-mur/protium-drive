@@ -537,6 +537,8 @@ export type FakeDriveClientOptions = {
 export class FakeDriveClient implements SdkSurface {
     private readonly schedulers = new Set<FakeScheduler>();
     private readonly counts: CallCounts = { methods: {}, listings: {}, nodeLoads: {}, downloads: {} };
+    /** The calls that wait under an `upload-queued` fault, each by the function that gives it its turn. */
+    private readonly waitingForTurn = new Set<() => void>();
 
     constructor(
         private readonly drive: FakeDrive,
@@ -598,7 +600,7 @@ export class FakeDriveClient implements SdkSurface {
         this.count('getFileUploader');
         const parentUid = uidOf(parent);
         const fault = await this.enter('getFileUploader', ...this.created(parentUid, name));
-        await waitIfHeld(fault, signal);
+        await this.waitIfHeld(fault, signal);
         validateName(name);
         this.drive.checkFreeName(parentUid, name);
         return uploader(metadata, signal, (content) => this.drive.createFile(parentUid, name, content), this.upload(fault));
@@ -608,7 +610,7 @@ export class FakeDriveClient implements SdkSurface {
         this.count('getFileRevisionUploader');
         const nodeUid = uidOf(uid);
         const fault = await this.enter('getFileRevisionUploader', this.drive.pathOfUid(nodeUid));
-        await waitIfHeld(fault, signal);
+        await this.waitIfHeld(fault, signal);
         this.requireRecord(nodeUid);
         return uploader(metadata, signal, (content) => this.drive.createRevision(nodeUid, content), this.upload(fault));
     }
@@ -713,7 +715,34 @@ export class FakeDriveClient implements SdkSurface {
 
     /** What an upload needs besides its content: its fault, the clock, and how to count its start. */
     private upload(fault: Fault | undefined): UploadSetting {
-        return { fault, clock: this.options.clock, started: () => this.count('uploadFromStream') };
+        return { fault, clock: this.options.clock, started: () => this.count('uploadFromStream'), ended: () => this.uploadEnded() };
+    }
+
+    /**
+     * Under an `upload-wait` fault, gives no uploader until `signal` aborts, then fails with
+     * `AbortError`. Under an `upload-queued` fault, gives none until another upload ends, and fails
+     * with `AbortError` if `signal` aborts first.
+     */
+    private async waitIfHeld(fault: Fault | undefined, signal: AbortSignal | undefined): Promise<void> {
+        if (fault?.kind === 'upload-wait') {
+            await untilAborted(signal);
+            throw faultError('upload-wait');
+        }
+        if (fault?.kind !== 'upload-queued') return;
+        let release!: () => void;
+        const turn = new Promise<'turn'>((resolve) => (release = () => resolve('turn')));
+        this.waitingForTurn.add(release);
+        try {
+            if ((await Promise.race([turn, untilAborted(signal).then(() => 'aborted' as const)])) === 'aborted') throw faultError('upload-queued');
+        } finally {
+            this.waitingForTurn.delete(release);
+        }
+    }
+
+    /** An upload ended: each call that waits under an `upload-queued` fault gets its uploader. */
+    private uploadEnded(): void {
+        for (const release of this.waitingForTurn) release();
+        this.waitingForTurn.clear();
     }
 
     private count(method: string, per?: Exclude<keyof CallCounts, 'methods'>, ...uids: string[]): void {
@@ -838,19 +867,19 @@ class FakeScheduler {
 }
 
 /** The fault kinds a call acts on itself, rather than throwing their error when it is entered. */
-const ACTED_ON: ReadonlySet<FaultKind> = new Set(['integrity', 'upload-part-way', 'upload-stall', 'upload-slow', 'upload-wait']);
+const ACTED_ON: ReadonlySet<FaultKind> = new Set(['integrity', 'upload-part-way', 'upload-stall', 'upload-slow', 'upload-wait', 'upload-queued']);
 
 /** How many parts an `upload-slow` fault reports, one each `SLOW_UPLOAD_STEP_MS` of the clock. */
 export const SLOW_UPLOAD_STEPS = 10;
 export const SLOW_UPLOAD_STEP_MS = 60_000;
 
-type UploadSetting = { fault?: Fault; clock?: Clock; started: () => void };
+type UploadSetting = { fault?: Fault; clock?: Clock; started: () => void; ended: () => void };
 
 function uploader(
     metadata: UploadMetadata,
     signal: AbortSignal | undefined,
     commit: (content: Content) => { nodeUid: string; nodeRevisionUid: string },
-    { fault, clock, started }: UploadSetting,
+    { fault, clock, started, ended }: UploadSetting,
 ): FileUploader {
     const upload = async (stream: ReadableStream, onProgress?: (uploadedBytes: number) => void): Promise<UploadController> => {
         started();
@@ -890,7 +919,7 @@ function uploader(
             return commit({ content, mediaType: metadata.mediaType, declaredSize: metadata.expectedSize, modificationTime: metadata.modificationTime });
         })();
         // The caller may never await completion; keep an early failure from being an unhandled rejection.
-        done.catch(() => {});
+        done.then(ended, ended);
         return { pause() {}, resume() {}, completion: () => done };
     };
     return {
@@ -931,13 +960,6 @@ function slowly(clock: Clock | undefined, signal: AbortSignal | undefined): { ne
     }, { once: true });
     let read = 0;
     return { next: () => ticks[read++] ?? Promise.reject(new AbortError('fake-drive: upload aborted')) };
-}
-
-/** Under an `upload-wait` fault, gives no uploader until `signal` aborts, then fails with `AbortError`. */
-async function waitIfHeld(fault: Fault | undefined, signal: AbortSignal | undefined): Promise<void> {
-    if (fault?.kind !== 'upload-wait') return;
-    await untilAborted(signal);
-    throw faultError('upload-wait');
 }
 
 /** Resolves once `signal` aborts; never, without one. */

@@ -426,6 +426,49 @@ describe('an upload that waits for its uploader', () => {
     });
 });
 
+describe('an upload that waits behind another', () => {
+    test('gets no uploader until another upload ends, then uploads', async () => {
+        drive.add('Photos', { type: 'folder' });
+        faults.add({ kind: 'upload-stall', operation: 'getFileUploader', path: 'Photos/beach.jpg' });
+        faults.add({ kind: 'upload-queued', operation: 'getFileUploader', path: 'Photos/dunes.jpg' });
+        const stall = new AbortController();
+        const stalled = await client.getFileUploader(drive.nodeAt('Photos').uid, 'beach.jpg', { mediaType: 'image/jpeg', expectedSize: 12 }, stall.signal);
+        const stalledUpload = (await stalled.uploadFromStream(new Blob(['sand and sea']).stream(), [])).completion();
+        stalledUpload.catch(() => {});
+        const queued = client.getFileUploader(drive.nodeAt('Photos').uid, 'dunes.jpg', { mediaType: 'text/plain', expectedSize: 10 }, new AbortController().signal);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(await Promise.race([queued.then(() => 'uploader'), 'still waiting'])).toBe('still waiting');
+
+        stall.abort();
+        await expect(stalledUpload).rejects.toBeInstanceOf(AbortError);
+        await (await (await queued).uploadFromStream(new Blob(['sand dunes']).stream(), [])).completion();
+        expect(new TextDecoder().decode(drive.content('Photos/dunes.jpg'))).toBe('sand dunes');
+    });
+
+    test('fails with AbortError if its signal aborts first, and starts no upload', async () => {
+        drive.add('Photos', { type: 'folder' });
+        faults.add({ kind: 'upload-queued', operation: 'getFileUploader', path: 'Photos' });
+        const abort = new AbortController();
+        const waiting = client.getFileUploader(drive.nodeAt('Photos').uid, 'dunes.jpg', { mediaType: 'text/plain', expectedSize: 10 }, abort.signal);
+        abort.abort();
+        await expect(waiting).rejects.toBeInstanceOf(AbortError);
+        expect(client.calls().methods.uploadFromStream).toBeUndefined();
+    });
+
+    test('on an overwrite, it also waits for another upload to end', async () => {
+        drive.add('Photos/dunes.jpg', { type: 'file', content: bytes('sand dunes') });
+        faults.add({ kind: 'upload-queued', operation: 'getFileRevisionUploader', path: 'Photos/dunes.jpg' });
+        const waiting = client
+            .getFileRevisionUploader(drive.nodeAt('Photos/dunes.jpg').uid, { mediaType: 'text/plain', expectedSize: 11 }, new AbortController().signal)
+            .then(() => 'uploader');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(await Promise.race([waiting, 'still waiting'])).toBe('still waiting');
+
+        await upload('Photos', 'beach.jpg', 'sand and sea');
+        expect(await waiting).toBe('uploader');
+    });
+});
+
 describe('every upload', () => {
     test('is counted when it starts, and reports its bytes as progress', async () => {
         drive.add('Photos', { type: 'folder' });
@@ -450,6 +493,7 @@ describe('setting a fault', () => {
             { kind: 'upload-stall', operation: 'getFileDownloader', path: 'a' },
             { kind: 'upload-slow', operation: 'createFolder', path: 'a' },
             { kind: 'upload-wait', operation: 'getFileDownloader', path: 'a' },
+            { kind: 'upload-queued', operation: 'getFileDownloader', path: 'a' },
             null,
         ];
         for (const fault of bad) expect(() => faults.add(fault as Fault)).toThrow(FaultError);
