@@ -42,10 +42,11 @@ export type DriveTreeOptions = {
 
 /**
  * How long an upload may move no bytes before it is aborted. The PUT then answers 504, which
- * rclone retries, instead of hanging until rclone's own one-hour timeout. The SDK reports
- * progress once per 4 MiB block, so this outlasts one block on a link of 15 KiB/s.
+ * rclone retries, instead of hanging until the client gives up. It is shorter than rclone's
+ * default `--timeout` of five minutes, so pdm answers first under rclone's defaults too. The SDK
+ * reports progress once per 4 MiB block, so this outlasts one block on a link of 17 KiB/s.
  */
-export const UPLOAD_STALL_MS = 5 * 60 * 1000;
+export const UPLOAD_STALL_MS = 4 * 60 * 1000;
 
 /**
  * Proton Drive as a tree of paths, on top of the SDK's node UIDs.
@@ -65,6 +66,12 @@ export class DriveTree {
     private pendingRestore?: ListingSnapshot;
     private restoredFrom?: string;
     private loads = 0;
+    /**
+     * Restarts the stall time of each upload still waiting for its uploader. The SDK's upload
+     * queue gives a waiting upload its turn only when the uploads ahead of it move, so the wait
+     * is stalled only when none of them moves.
+     */
+    private readonly waitingForUploader = new Set<() => void>();
 
     constructor(
         private readonly sdk: DriveSdk,
@@ -311,10 +318,21 @@ export class DriveTree {
             };
             if (signal?.aborted) clientFirst.abort();
             signal?.addEventListener('abort', onClientAbort, { once: true });
+            const waiting = () => stall.restart();
+            let running = false;
+            // An upload that holds a queue slot moves the queue when it ends, however it ends.
+            const end = () => {
+                if (!running) return;
+                running = false;
+                this.uploadMoved();
+            };
+            stall.onFire(end);
             return withUploadRequest(clientFirst.signal, async () => {
                 try {
                     // The stall time counts the wait for an uploader too: a queue slot the SDK
-                    // never frees would otherwise hold the PUT until the client gives up.
+                    // never frees would otherwise hold the PUT until the client gives up. Each
+                    // move of the uploads ahead of it starts that time again.
+                    this.waitingForUploader.add(waiting);
                     stall.restart();
                     // The race ends the PUT on a stall even if the SDK is slow to honour the abort.
                     const result = await Promise.race([
@@ -322,8 +340,14 @@ export class DriveTree {
                             const uploader = existing
                                 ? await this.sdk.getFileRevisionUploader(existing.uid, metadata, uploadSignal)
                                 : await this.sdk.getFileUploader(parent.uid, name, metadata, uploadSignal);
+                            this.waitingForUploader.delete(waiting);
+                            running = true;
                             stall.restart();
-                            const controller = await uploader.uploadFromStream(body, [], () => stall.restart());
+                            this.uploadMoved();
+                            const controller = await uploader.uploadFromStream(body, [], () => {
+                                stall.restart();
+                                this.uploadMoved();
+                            });
                             return controller.completion();
                         })(),
                         stall.fired,
@@ -333,6 +357,8 @@ export class DriveTree {
                 } catch (error: unknown) {
                     throw stall.signal.aborted ? stall.signal.reason : error;
                 } finally {
+                    this.waitingForUploader.delete(waiting);
+                    end();
                     stall.stop();
                     signal?.removeEventListener('abort', onClientAbort);
                 }
@@ -352,10 +378,16 @@ export class DriveTree {
         return { entry, created: !existing };
     }
 
+    /** Gives each upload that waits for its uploader the whole stall time again. */
+    private uploadMoved() {
+        for (const restart of this.waitingForUploader) restart();
+    }
+
     /**
      * A timer that aborts `signal` with a 504 `DriveError` once `UPLOAD_STALL_MS` passes after the
      * last `restart()`; `fired` rejects with the same error. It does nothing until the first
-     * `restart()`, and nothing after `stop()`.
+     * `restart()`, and nothing after `stop()`. The `onFire` callback runs in the timer's own turn,
+     * before any other timer can fire.
      */
     private stallWatch(message: string) {
         const setTimer = this.options.setTimeout ?? ((callback, ms) => setTimeout(callback, ms));
@@ -363,6 +395,7 @@ export class DriveTree {
         const controller = new AbortController();
         let handle: unknown;
         let stopped = false;
+        let onFired = () => {};
         let fail!: (error: DriveError) => void;
         const fired = new Promise<never>((_resolve, reject) => (fail = reject));
         fired.catch(() => {});
@@ -375,6 +408,7 @@ export class DriveTree {
             signal: controller.signal,
             fired,
             stop,
+            onFire: (callback: () => void) => void (onFired = callback),
             restart: () => {
                 if (stopped) return;
                 if (handle !== undefined) clearTimer(handle as never);
@@ -382,6 +416,7 @@ export class DriveTree {
                     handle = undefined;
                     const error = new DriveError(504, message);
                     stop();
+                    onFired();
                     controller.abort(error);
                     fail(error);
                 }, UPLOAD_STALL_MS);

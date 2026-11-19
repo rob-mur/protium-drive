@@ -529,6 +529,13 @@ describe('DriveTree upload that moves no bytes', () => {
                 pending.delete(handle);
                 timer.callback();
             },
+            /** Fires the pending timer `handle`. */
+            fireHandle(handle: number) {
+                const timer = pending.get(handle);
+                expect(timer).toBeDefined();
+                pending.delete(handle);
+                timer!.callback();
+            },
         };
     }
 
@@ -577,8 +584,8 @@ describe('DriveTree upload that moves no bytes', () => {
         expect(state.started).toBe(true);
     }
 
-    test('waits five minutes', () => {
-        expect(UPLOAD_STALL_MS).toBe(5 * 60 * 1000);
+    test('waits four minutes, inside the five-minute timeout rclone has by default', () => {
+        expect(UPLOAD_STALL_MS).toBe(4 * 60 * 1000);
     });
 
     test('an upload that moves no bytes for the stall time is aborted, and fails as a gateway timeout', async () => {
@@ -835,6 +842,165 @@ describe('DriveTree upload that moves no bytes', () => {
             'warn: [upload] Upload failed AbortError: Request aborted',
             'error: [upload] Upload failed AbortError: Request aborted',
         ]);
+    });
+
+    /**
+     * An SDK whose uploader for each file name waits until the test calls `give`, as when the
+     * SDK's upload queue is full. A given upload reports a block on `progress`, and ends on
+     * `finish` or `fail`. Both the wait and the upload fail with AbortError once the signal aborts.
+     */
+    function queueSdk() {
+        const base = fakeSdk(nodes());
+        type Held = { give(): void; progress(): void; finish(): void; fail(): void; started: boolean };
+        const uploads = new Map<string, Held>();
+        const sdk = {
+            ...base,
+            getFileUploader: (_parent: NodeOrUid, name: string, _metadata: unknown, signal?: AbortSignal) =>
+                new Promise((resolve, reject) => {
+                    const upload: Held = { give() {}, progress() {}, finish() {}, fail() {}, started: false };
+                    uploads.set(name, upload);
+                    signal?.addEventListener('abort', () => reject(new AbortError('waiting aborted')), { once: true });
+                    upload.give = () =>
+                        resolve({
+                            uploadFromStream: async (_stream: ReadableStream, _thumbnails: unknown, onProgress?: (bytes: number) => void) => {
+                                upload.started = true;
+                                const done = new Promise((resolveDone, rejectDone) => {
+                                    upload.progress = () => onProgress?.(4 * 1024 * 1024);
+                                    upload.finish = () => resolveDone({ nodeUid: `new-${name}`, nodeRevisionUid: 'rev' });
+                                    upload.fail = () => rejectDone(new Error('upload failed'));
+                                    signal?.addEventListener('abort', () => rejectDone(new AbortError('upload aborted')), { once: true });
+                                });
+                                done.catch(() => {});
+                                return { pause() {}, resume() {}, completion: () => done };
+                            },
+                        });
+                }),
+            getNode: async (uid: string) => file(uid, uid.replace(/^new-/, ''), 'photos'),
+        } as unknown as DriveSdk;
+        /** Waits until `name` has asked for its uploader. */
+        const asked = async (name: string) => {
+            for (let i = 0; i < 100 && !uploads.has(name); i++) await Promise.resolve();
+            expect(uploads.has(name)).toBe(true);
+            return uploads.get(name)!;
+        };
+        return { sdk, asked };
+    }
+
+    const write = (tree: DriveTree, name: string) => tree.upload(['Photos'], name, body(), { mediaType: 'image/jpeg' });
+
+    /** The handle of the one stall timer armed while `step` ran. */
+    async function armedBy(timers: ReturnType<typeof manualTimers>, step: () => Promise<unknown>) {
+        const before = new Set(timers.pending.keys());
+        await step();
+        const armed = [...timers.pending.keys()].filter((handle) => !before.has(handle));
+        expect(armed).toHaveLength(1);
+        return armed[0]!;
+    }
+
+    test('an upload that waits for an uploader gets the whole stall time again each time another upload gets its uploader, moves bytes or ends', async () => {
+        const timers = manualTimers();
+        const { sdk, asked } = queueSdk();
+        const tree = new DriveTree(sdk, QUIET, new Backoff(), timers);
+        const beach = write(tree, 'beach.jpg');
+        const beachUpload = await asked('beach.jpg');
+        let dunes!: ReturnType<typeof write>;
+        let waiting = await armedBy(timers, async () => {
+            dunes = write(tree, 'dunes.jpg');
+            await asked('dunes.jpg');
+        });
+        const moves = async (step: () => Promise<unknown> | void) => {
+            await step();
+            expect(timers.pending.has(waiting)).toBe(false);
+            const now = [...timers.pending.keys()].at(-1)!;
+            expect(timers.pending.get(now)?.ms).toBe(UPLOAD_STALL_MS);
+            waiting = now;
+        };
+        await moves(async () => {
+            beachUpload.give();
+            await started(beachUpload);
+        });
+        await moves(() => beachUpload.progress());
+        await moves(async () => {
+            beachUpload.finish();
+            await beach;
+        });
+        expect(timers.pending.size).toBe(1);
+        const dunesUpload = await asked('dunes.jpg');
+        dunesUpload.give();
+        await started(dunesUpload);
+        dunesUpload.finish();
+        expect((await dunes).entry.name).toBe('dunes.jpg');
+        expect(timers.pending.size).toBe(0);
+    });
+
+    test('an upload that waits behind a stalled upload outlives its abort: the abort restarts its stall time at once', async () => {
+        const timers = manualTimers();
+        const { sdk, asked } = queueSdk();
+        const tree = new DriveTree(sdk, QUIET, new Backoff(), timers);
+        let beach!: ReturnType<typeof write>;
+        const stalled = await armedBy(timers, async () => {
+            beach = write(tree, 'beach.jpg');
+            const upload = await asked('beach.jpg');
+            upload.give();
+            await started(upload);
+        });
+        let dunes!: ReturnType<typeof write>;
+        const waiting = await armedBy(timers, async () => {
+            dunes = write(tree, 'dunes.jpg');
+            await asked('dunes.jpg');
+        });
+        timers.fireHandle(stalled);
+        // At once, before any await: a timer due at the same moment must not fire first.
+        expect(timers.pending.has(waiting)).toBe(false);
+        expect(timers.pending.size).toBe(1);
+        await expect(beach).rejects.toMatchObject({ name: 'DriveError', status: 504 });
+        const dunesUpload = await asked('dunes.jpg');
+        dunesUpload.give();
+        await started(dunesUpload);
+        dunesUpload.finish();
+        expect((await dunes).entry.name).toBe('dunes.jpg');
+        expect(timers.pending.size).toBe(0);
+    });
+
+    test('an upload that fails gives the uploads waiting behind it the whole stall time again', async () => {
+        const timers = manualTimers();
+        const { sdk, asked } = queueSdk();
+        const tree = new DriveTree(sdk, QUIET, new Backoff(), timers);
+        const beach = write(tree, 'beach.jpg');
+        const beachUpload = await asked('beach.jpg');
+        beachUpload.give();
+        await started(beachUpload);
+        const waiting = await armedBy(timers, async () => {
+            void write(tree, 'dunes.jpg').catch(() => {});
+            await asked('dunes.jpg');
+        });
+        beachUpload.fail();
+        await expect(beach).rejects.toThrow('upload failed');
+        expect(timers.pending.has(waiting)).toBe(false);
+        expect(timers.pending.size).toBe(1);
+    });
+
+    test('uploads that all wait, with nothing moving, are each aborted at the stall time', async () => {
+        const timers = manualTimers();
+        const { sdk, asked } = queueSdk();
+        const tree = new DriveTree(sdk, QUIET, new Backoff(), timers);
+        let beach!: ReturnType<typeof write>;
+        const first = await armedBy(timers, async () => {
+            beach = write(tree, 'beach.jpg');
+            await asked('beach.jpg');
+        });
+        let dunes!: ReturnType<typeof write>;
+        const second = await armedBy(timers, async () => {
+            dunes = write(tree, 'dunes.jpg');
+            await asked('dunes.jpg');
+        });
+        timers.fireHandle(first);
+        expect(timers.pending.has(second)).toBe(true);
+        await expect(beach).rejects.toMatchObject({ name: 'DriveError', status: 504 });
+        expect(timers.pending.has(second)).toBe(true);
+        timers.fireHandle(second);
+        await expect(dunes).rejects.toMatchObject({ name: 'DriveError', status: 504 });
+        expect(timers.pending.size).toBe(0);
     });
 });
 

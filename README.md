@@ -91,6 +91,11 @@ It logs the first count a minute after it mounts, also when it is 0. After that,
 each minute while some uploads are pending, and one `0 uploads pending` when all of them are on
 the Drive. Before you stop the mount, wait for `0 uploads pending`.
 
+An upload that moves no bytes for 4 minutes fails with 504, and rclone tries it again. An
+upload that waits behind other uploads fails only when none of them moves for 4 minutes. If
+you run `serve` with your own rclone, give rclone `--timeout 1h`, as `mount` does. Then rclone
+does not end a slow upload before the serve answers.
+
 ## Cache settings
 
 | Flag | Default | What it does |
