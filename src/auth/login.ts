@@ -1,6 +1,6 @@
 import type { Logger } from '../../vendor/proton-drive-sdk-account';
 
-import { connect } from '../proton/connect';
+import { type Connection, connect } from '../proton/connect';
 import { acquireStateLock } from '../session/lock';
 import { SessionFileStore } from '../session/store';
 import { APP_VERSION } from '../version';
@@ -8,6 +8,14 @@ import { THIRD_PARTY_NOTICE } from '../notice';
 
 export const REPLACE_WARNING =
     'A session already exists in this state directory. Signing in again replaces it.';
+
+/**
+ * How many sign-in links one `auth login` prints. Proton limits each link to about 10 minutes,
+ * and Proton's own apps print a new link when one times out, up to 3, so as not to load its API.
+ */
+export const SIGN_IN_LINKS = 3;
+/** The account module's error when no one approved a sign-in link in time (authWeb.ts). */
+const LINK_TIMED_OUT = 'Authentication timed out';
 
 export type LoginOptions = {
     stateDir: string;
@@ -50,15 +58,35 @@ async function signIn(store: SessionFileStore, options: LoginOptions, print: (li
         }
         print(THIRD_PARTY_NOTICE);
         print(`Client: ${APP_VERSION}`);
-        await connection.auth.authViaWeb((signInUrl) => {
-            print('');
-            print('Open this URL in a browser (any device) and approve the sign-in:');
-            print(signInUrl);
-            print('Keep this command running. It waits up to 10 minutes for the approval...');
-        }, signal);
+        await signInThroughLinks(connection.auth, print, signal);
         print(`Signed in. Session saved to ${store.filePath} (mode 0600).`);
         return 0;
     } finally {
         await connection.stop();
+    }
+}
+
+/** Prints a sign-in link and waits for its approval; prints a new link when one times out. */
+async function signInThroughLinks(auth: Connection['auth'], print: (line: string) => void, signal?: AbortSignal): Promise<void> {
+    for (let link = 1; ; link++) {
+        try {
+            await auth.authViaWeb((signInUrl) => {
+                print('');
+                if (link === 1) {
+                    print('Open this URL in a browser (any device) and approve the sign-in:');
+                    print(signInUrl);
+                    print(`Keep this command running. Each link works for about 10 minutes. When one times out, a new link follows, up to ${SIGN_IN_LINKS} links.`);
+                } else {
+                    print(`The last link timed out. Open this new URL instead (link ${link} of ${SIGN_IN_LINKS}):`);
+                    print(signInUrl);
+                }
+            }, signal);
+            return;
+        } catch (error: unknown) {
+            if (!(error instanceof Error && error.message === LINK_TIMED_OUT)) throw error;
+            if (link === SIGN_IN_LINKS) {
+                throw new Error(`No one approved the sign-in: all ${SIGN_IN_LINKS} sign-in links timed out. Run proton-drive-mount auth login again.`);
+            }
+        }
     }
 }

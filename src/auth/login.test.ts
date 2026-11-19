@@ -148,6 +148,96 @@ describe('authLogin', () => {
         await release();
     });
 
+    describe('a sign-in link that times out', () => {
+        /** One link's wait in the account module: 5 s, then 10 minutes of polls. */
+        const LINK_LIFETIME_S = 5 + 10 * 60;
+        const isUrl = (line: string) => /^https:\/\/\S+$/.test(line.trim());
+
+        /** Starts `auth login` on the fake drive; `links` resolves once `count` URLs are out. */
+        function start(stateDir: string, signal?: AbortSignal) {
+            const lines: string[] = [];
+            let controlUrl: URL | undefined;
+            const waiters: Array<{ count: number; resolve: () => void }> = [];
+            const done = authLogin({
+                stateDir,
+                logger: QUIET,
+                fakeDriveDir: scratch('drive'),
+                signal,
+                print: (line) => {
+                    lines.push(line);
+                    const urls = lines.filter(isUrl).length;
+                    for (const waiter of waiters.filter((each) => each.count <= urls)) waiter.resolve();
+                },
+                onControlUrl: (url) => (controlUrl = url),
+            });
+            done.catch(() => {});
+            const links = (count: number) =>
+                lines.filter(isUrl).length >= count ? Promise.resolve() : new Promise<void>((resolve) => waiters.push({ count, resolve }));
+            const post = (path: string, body?: unknown) =>
+                fetch(new URL(path, controlUrl), { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
+            // The last timeout ends the sign-in, which may close the control channel before it answers.
+            const timeOut = () => post('clock/advance', { seconds: LINK_LIFETIME_S }).catch(() => undefined);
+            return { lines, done, links, timeOut, approve: () => post('account/approve') };
+        }
+
+        test('is replaced by a new link, and approving the new link signs the user in', async () => {
+            const stateDir = scratch('state');
+            const login = start(stateDir);
+            await login.links(1);
+            await login.timeOut();
+            await login.links(2);
+            await login.approve();
+
+            expect(await login.done).toBe(0);
+            const urls = login.lines.filter(isUrl);
+            expect(new Set(urls).size).toBe(2);
+            const second = login.lines.indexOf(urls[1]!);
+            expect(login.lines[second - 1]).toBe('The last link timed out. Open this new URL instead (link 2 of 3):');
+            expect(login.lines.at(-1)).toContain('Signed in.');
+            expect(await new SessionFileStore(stateDir).load()).not.toBeNull();
+        });
+
+        test('the first link says how long a link works and that a new one follows', async () => {
+            const login = start(scratch('state'));
+            await login.links(1);
+            await login.approve();
+            expect(await login.done).toBe(0);
+            expect(login.lines).toContain(
+                'Keep this command running. Each link works for about 10 minutes. When one times out, a new link follows, up to 3 links.',
+            );
+            expect(login.lines.some((line) => line.includes('waits up to 10 minutes'))).toBeFalse();
+        });
+
+        test('three times stops the sign-in with an error that says so, and saves no session', async () => {
+            const stateDir = scratch('state');
+            const login = start(stateDir);
+            for (const link of [1, 2, 3]) {
+                await login.links(link);
+                await login.timeOut();
+            }
+
+            await expect(login.done).rejects.toThrow('No one approved the sign-in: all 3 sign-in links timed out. Run proton-drive-mount auth login again.');
+            expect(new Set(login.lines.filter(isUrl)).size).toBe(3);
+            expect(await new SessionFileStore(stateDir).load()).toBeNull();
+            const release = await acquireStateLock(stateDir);
+            await release();
+        });
+
+        test('an abort while a later link waits stops the sign-in at once, with no new link', async () => {
+            const stateDir = scratch('state');
+            const controller = new AbortController();
+            const login = start(stateDir, controller.signal);
+            await login.links(1);
+            await login.timeOut();
+            await login.links(2);
+            controller.abort();
+
+            await expect(login.done).rejects.toThrow();
+            expect(login.lines.filter(isUrl)).toHaveLength(2);
+            expect(await new SessionFileStore(stateDir).load()).toBeNull();
+        });
+    });
+
     test('an aborted sign-in does not save a session', async () => {
         const stateDir = scratch('state');
         const controller = new AbortController();

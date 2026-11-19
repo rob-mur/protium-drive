@@ -51,6 +51,10 @@ proton-drive-mount auth login
 Run it and follow what it prints. Keep the command running until it exits; it then has saved
 the session.
 
+Proton limits each sign-in link to about 10 minutes. When a link times out, `auth login` prints a
+new link, up to 3 links in about 30 minutes, as Proton's own apps do. When the third link times
+out, it exits 1; run it again.
+
 Each computer needs its own `auth login`. The session is saved on that computer only, in
 `~/.local/state/proton-drive-mount/session.json` (`$XDG_STATE_HOME/proton-drive-mount`, or the
 folder you give with `--state-dir`). Do not copy the session file to another computer; sign in
