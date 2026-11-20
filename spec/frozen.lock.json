@@ -74,34 +74,22 @@
     {
       "id": "the-mount-shows-drive-files-as-files",
       "path": "spec/features/mount.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the mounted file holds \"([^\"]*)\", and the mounted folder \"([^\"]*)\" holds exactly \"([^\"]*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-file-written-through-the-mount-reaches-the-drive",
       "path": "spec/features/mount.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^within (\\d+) seconds the Drive holds \"([^\"]*)\" containing \"([^\"]*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-mount-starts-on-a-folder-a-killed-mount-left",
       "path": "spec/features/mount.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the mounted file holds \"([^\"]*)\", and the mounted folder \"([^\"]*)\" holds exactly \"([^\"]*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-mount-creates-its-folder-when-it-does-not-exist",
       "path": "spec/features/mount.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the mounted file holds \"([^\"]*)\", and the mounted folder \"([^\"]*)\" holds exactly \"([^\"]*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-mount-refuses-a-folder-that-holds-files",
@@ -151,18 +139,12 @@
     {
       "id": "the-mount-refuses-a-request-without-its-credential",
       "path": "spec/features/local-access.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the mount's port refuses the program as unauthorised, and the Drive did not list \"([^\"]*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "the-mount-keeps-its-credential-off-the-command-line",
       "path": "spec/features/local-access.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^rclone holds the mount's credential in its environment, and no command line of the mount's processes holds it$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "listing-a-large-folder-loads-each-photo-once",
@@ -187,18 +169,12 @@
     {
       "id": "a-file-added-elsewhere-shows-in-the-mount-after-the-dir-cache-time",
       "path": "spec/features/mount-settings.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^within (\\d+) seconds the mounted folder \"([^\"]*)\" holds exactly \"([^\"]*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-same-size-edit-elsewhere-shows-in-the-mount-after-the-dir-cache-time",
       "path": "spec/features/mount-settings.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the mounted file \"([^\"]*)\" held \"([^\"]*)\" at first, and within (\\d+) seconds it holds \"([^\"]*)\" on two reads in a row$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-dir-cache-time-that-is-not-a-duration-stops-the-mount-before-the-serve",
@@ -216,50 +192,32 @@
     {
       "id": "a-write-a-killed-mount-left-reaches-the-drive-after-the-next-start",
       "path": "spec/features/mount.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^within (\\d+) seconds the Drive holds \"([^\"]*)\" containing \"([^\"]*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-write-a-killed-mount-left-reaches-the-drive-after-a-start-on-another-port",
       "path": "spec/features/mount.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^within (\\d+) seconds the Drive holds \"([^\"]*)\" containing \"([^\"]*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-mount-stopped-with-a-write-pending-names-the-file",
       "path": "spec/features/mount.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the mount's log names \"([^\"]*)\" as not yet on the Drive$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-stopped-mount-unmounts-the-folder-and-exits-0",
       "path": "spec/features/mount.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the mount exits 0 on its own, and the folder is no longer mounted$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-running-mount-logs-a-write-not-yet-on-the-drive-as-pending",
       "path": "spec/features/mount.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^within (\\d+) seconds the mount's latest count of pending uploads is \"([^\"]*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-running-mount-logs-0-pending-uploads-once-the-write-is-on-the-drive",
       "path": "spec/features/mount.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^within (\\d+) seconds the Drive holds \"([^\"]*)\" containing \"([^\"]*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-mount-without-a-session-exits-as-needing-login",
