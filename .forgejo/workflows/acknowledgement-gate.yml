@@ -1,45 +1,15 @@
 name: acknowledgement-gate
-
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
-
 concurrency:
   group: acknowledgement-gate-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
-defaults:
-  run:
-    shell: devenv --profile acknowledgement-gate shell bash -- -e {0}
-
+  cancel-in-progress: false
 jobs:
-  acknowledgement-gate:
-    name: "cd-acknowledgement-gate"
-    runs-on: nix-host-2cpu-4gb
-    timeout-minutes: 45
-    env:
-      GATE_REVIEWER: cd-pipeline
-      API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
-      PR_NUMBER: ${{ github.event.pull_request.number }}
-      PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-      FJ_TOKEN: ${{ secrets.CD_PIPELINE_TOKEN }}
-      HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-      BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
-      BASE_REF: ${{ github.event.pull_request.base.ref }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Does the base hold a devenv?
-        id: base
-        shell: bash
-        run: |
-          set -eu
-          if [ -f devenv.nix ]; then
-            echo "devenv=yes" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::cd-acknowledgement-gate: $BASE_REF holds no devenv.nix, so the pipeline is not adopted there yet and this merge request has nothing to acknowledge. No review posted."
-            echo "devenv=no" >> "$GITHUB_OUTPUT"
-          fi
-      - if: steps.base.outputs.devenv == 'yes'
-        run: cd-acknowledgement-gate
+  cd-pipeline:
+    uses: rob/continuous-delivery/.cd/workflows/acknowledgement-gate.yml@95689d9d3151af154af60c4997453b9281e2d343
+    with:
+      gate-reviewer: cd-pipeline
+      runs-on: nix-host-2cpu-4gb
+    secrets:
+      CD_PIPELINE_TOKEN: ${{ secrets.CD_PIPELINE_TOKEN }}

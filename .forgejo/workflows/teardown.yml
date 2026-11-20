@@ -1,25 +1,12 @@
 name: teardown
-
 on:
   pull_request:
     types: [closed]
-
 concurrency:
   group: cd-environment-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: false
-
-defaults:
-  run:
-    shell: devenv shell bash -- -e {0}
-
-env:
-  CI_ENVIRONMENT: pr-${{ github.event.pull_request.number }}
-
 jobs:
-  teardown:
-    name: "ci:deploy:teardown"
-    runs-on: nix-host-2cpu-4gb
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - run: cd-run ci:deploy:teardown
+  cd-pipeline:
+    uses: rob/continuous-delivery/.cd/workflows/teardown.yml@95689d9d3151af154af60c4997453b9281e2d343
+    with:
+      runs-on: nix-host-2cpu-4gb

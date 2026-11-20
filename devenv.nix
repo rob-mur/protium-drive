@@ -8,6 +8,8 @@
     pkgs.actionlint
     pkgs.bun
     pkgs.coreutils
+    # The mount runs fusermount3 to clear a mountpoint that a killed mount left mounted.
+    pkgs.fuse3.bin
     pkgs.git
     pkgs.jq
     pkgs.rclone
@@ -23,6 +25,10 @@
 
     records.prefix = "europe-west1-docker.pkg.dev/ai-ci-pipeline";
     records.namespace = "proton-drive-mount";
+
+    # The FUSE acceptance scenarios mount through /dev/fuse, and only this runner's job pod has it.
+    forge.runners.merge-request.acceptance = "nix-host-2cpu-4gb-fuse";
+    forge.runners.main.acceptance = "nix-host-2cpu-4gb-fuse";
 
     frozenSuite = {
       command = [ "bun" "spec/node_modules/.bin/cucumber-js" "--config" "spec/cucumber.mjs" ];

@@ -1,51 +1,12 @@
 name: freeze-gate
-
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, edited]
-
 concurrency:
   group: freeze-gate-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
-defaults:
-  run:
-    shell: devenv shell bash -- -e {0}
-
+  cancel-in-progress: false
 jobs:
-  freeze-gate:
-    name: "cd-freeze-gate"
-    runs-on: nix-host-2cpu-4gb
-    timeout-minutes: 45
-    steps:
-      - name: Refuse a merge request from a fork
-        env:
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
-        shell: bash
-        run: |
-          set -eu
-          if [ -z "$HEAD_REPO" ] || [ -z "$BASE_REPO" ]; then
-            echo "cd-freeze-gate: refused: the event names no head or base repository (head='$HEAD_REPO', base='$BASE_REPO'), so the gate cannot tell a fork from a branch"
-            exit 1
-          fi
-          if [ "$HEAD_REPO" != "$BASE_REPO" ]; then
-            echo "cd-freeze-gate: refused: the head is a fork. '$HEAD_REPO' is not '$BASE_REPO', and the freeze gate judges only a branch of the base repository."
-            exit 1
-          fi
-          echo "cd-freeze-gate: the head is a branch of '$BASE_REPO', not a fork"
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Create refs/cd-base and refs/cd-head
-        env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          set -eu
-          git fetch --no-tags --force origin \
-            "refs/heads/$BASE_REF:refs/cd-base" \
-            "refs/pull/$PR_NUMBER/head:refs/cd-head"
-          git rev-parse --verify refs/cd-base
-          git rev-parse --verify refs/cd-head
-      - run: cd-freeze-gate
+  cd-pipeline:
+    uses: rob/continuous-delivery/.cd/workflows/freeze-gate.yml@95689d9d3151af154af60c4997453b9281e2d343
+    with:
+      runs-on: nix-host-2cpu-4gb
