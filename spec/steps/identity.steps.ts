@@ -21,3 +21,11 @@ Then(/^the answer names the revision the binary was built from$/, function (this
     `--version answered '${answer.stdout.trim()}', which does not name ${this.binary.revision}`,
   );
 });
+
+// A build from a git checkout has no release stamp, so its revision takes the place of the version.
+Then(/^the first line of the answer is the binary's name and the revision it was built from$/, function (this: DriveWorld) {
+  const answer = this.lastAnswer();
+  assert.equal(answer.exitCode, 0, `--version exited ${answer.exitCode}: ${answer.stderr}`);
+  const first = answer.stdout.split("\n")[0];
+  assert.equal(first, `proton-drive-mount ${this.binary.revision}`, `--version answered '${answer.stdout.trim()}'`);
+});

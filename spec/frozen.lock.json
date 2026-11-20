@@ -67,6 +67,14 @@
       "expected_status": "green"
     },
     {
+      "id": "a-git-build-gives-its-revision-as-its-version",
+      "path": "spec/features/identity.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the first line of the answer is the binary's name and the revision it was built from$"
+      ]
+    },
+    {
       "id": "the-mount-shows-drive-files-as-files",
       "path": "spec/features/mount.feature",
       "expected_status": "red",
