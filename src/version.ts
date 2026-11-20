@@ -28,3 +28,23 @@ export function isValidAppVersion(value: string): boolean {
 export function buildRevision(env: NodeJS.ProcessEnv = process.env): string {
     return env.PDM_BUILD_REVISION ?? 'unknown';
 }
+
+/**
+ * What the first line of `--version` gives after the binary's name.
+ *
+ * A build from a continuous-delivery release archive carries the archive's
+ * stamp: the Nix wrapper sets `PDM_BUILD_VERSION` and `PDM_BUILD_DATE` from
+ * `.cd-release.json`, so the line takes the rustc shape
+ * `1.2.0 (0123abc 2026-10-13)`. Any other build has no release version to give,
+ * so its revision (or `unknown`) takes the place of the version. pdm never
+ * works a version out itself: it only repeats the stamp.
+ */
+export function buildIdentity(env: NodeJS.ProcessEnv = process.env): string {
+    const revision = buildRevision(env);
+    const version = env.PDM_BUILD_VERSION;
+    const date = env.PDM_BUILD_DATE;
+    if (version && date) {
+        return `${version} (${revision.slice(0, 7)} ${date})`;
+    }
+    return revision;
+}

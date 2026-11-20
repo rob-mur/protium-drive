@@ -14,6 +14,24 @@ let
   packageJson = lib.importJSON ../package.json;
   version = packageJson.version;
 
+  # A continuous-delivery release archive (`source.tar.gz` on each release)
+  # holds `.cd-release.json`: {"version", "commit", "committed_at"}. A build
+  # from the archive gives that version, commit and date to --version. A build
+  # from a git checkout has no stamp and gives `revision` alone.
+  stampFile = ../.cd-release.json;
+  stamp = if builtins.pathExists stampFile then lib.importJSON stampFile else null;
+  stampWrapperFlags = lib.optionalString (stamp != null) (
+    lib.escapeShellArgs [
+      "--set"
+      "PDM_BUILD_VERSION"
+      stamp.version
+      "--set"
+      "PDM_BUILD_DATE"
+      (builtins.substring 0 10 stamp.committed_at)
+    ]
+  );
+  buildRevision = if stamp != null then stamp.commit else revision;
+
   src = lib.fileset.toSource {
     root = ../.;
     fileset = lib.fileset.unions [
@@ -70,8 +88,13 @@ stdenvNoCC.mkDerivation {
     ln -s ${nodeModules}/node_modules $app/node_modules
     makeWrapper ${lib.getExe bun} $out/bin/proton-drive-mount \
       --set PDM_RCLONE ${lib.getExe rclone} \
-      --set PDM_BUILD_REVISION ${lib.escapeShellArg revision} \
-      --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [ libsecret glib ]} \
+      --set PDM_BUILD_REVISION ${lib.escapeShellArg buildRevision} ${stampWrapperFlags} \
+      --prefix LD_LIBRARY_PATH : ${
+        lib.makeLibraryPath [
+          libsecret
+          glib
+        ]
+      } \
       --add-flags "$app/src/main.ts"
     runHook postInstall
   '';

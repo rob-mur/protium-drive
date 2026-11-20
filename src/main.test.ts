@@ -56,15 +56,33 @@ describe('--version', () => {
         expect(answer.stdout).toMatch(new RegExp(`\\b${REV}\\b`));
     });
 
-    test('names the client Proton sees and the Drive SDK it uses', () => {
-        const answer = run(['--version'], ENV);
-        expect(answer.stdout).toContain('external-drive-protondrivemount@0.1.0-alpha');
-        expect(answer.stdout).toContain(`js@${SDK_VERSION}`);
-        expect(answer.stdout).toContain(`x-pm-appversion`);
+    test('a git build gives its revision on the first line and nothing else', () => {
+        const first = run(['--version'], ENV).stdout.split('\n')[0];
+        expect(first).toBe(`proton-drive-mount ${REV}`);
     });
 
-    test('the version answer matches the app-version the binary sends', () => {
-        expect(versionAnswer(ENV)).toContain('(x-pm-appversion ');
+    test('a release build gives the stamped version on the first line and the full commit below it', () => {
+        const commit = '0123abc' + 'f'.repeat(33);
+        const lines = run(['--version'], {
+            PDM_BUILD_REVISION: commit,
+            PDM_BUILD_VERSION: '1.2.0',
+            PDM_BUILD_DATE: '2026-10-13',
+        }).stdout.split('\n');
+        expect(lines[0]).toBe('proton-drive-mount 1.2.0 (0123abc 2026-10-13)');
+        expect(lines).toContain(`commit-hash: ${commit}`);
+        expect(lines).toContain('commit-date: 2026-10-13');
+    });
+
+    test('names the client Proton sees and the Drive SDK it uses, each on its own line', () => {
+        const lines = run(['--version'], ENV).stdout.split('\n');
+        expect(lines).toContain('x-pm-appversion: external-drive-protondrivemount@0.1.0-alpha');
+        expect(lines).toContain(`drive-sdk: js@${SDK_VERSION}`);
+    });
+
+    test('a build with no known commit says unknown', () => {
+        const lines = run(['--version'], {}).stdout.split('\n');
+        expect(lines[0]).toBe('proton-drive-mount unknown');
+        expect(lines).toContain('commit-hash: unknown');
     });
 });
 
@@ -77,8 +95,9 @@ describe('--help', () => {
         }
     });
 
-    test('HELP prints the usage for the current version', () => {
-        expect(HELP).toContain(`proton-drive-mount ${VERSION}`);
+    test('HELP does not claim the package.json version as the build version', () => {
+        expect(HELP.split('\n')[0]).toBe('proton-drive-mount: serve Proton Drive over local WebDAV.');
+        expect(HELP).not.toContain(VERSION);
         expect(HELP).toContain('Usage:');
     });
 });

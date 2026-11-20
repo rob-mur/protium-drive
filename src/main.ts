@@ -22,11 +22,11 @@ import { systemKeyring, type Keyring } from './proton/keyring.ts';
 import { cacheSettings, DEFAULT_CACHE, mountCommand, mountDeps } from './mount.ts';
 import { serveCommand, DEFAULT_HOST, DEFAULT_PORT } from './serve.ts';
 import { readCredentialFile } from './credential-file.ts';
-import { APP_VERSION, VERSION, buildRevision } from './version.ts';
+import { APP_VERSION, buildIdentity, buildRevision } from './version.ts';
 
 export { THIRD_PARTY_NOTICE };
 
-export const HELP = `proton-drive-mount ${VERSION}: serve Proton Drive over local WebDAV.
+export const HELP = `proton-drive-mount: serve Proton Drive over local WebDAV.
 ${THIRD_PARTY_NOTICE}
 
 Usage:
@@ -99,8 +99,19 @@ Exit status:
   130  Interrupted.
 `;
 
+/**
+ * The `--version` answer, shaped like `rustc -vV`. Tools read only the first
+ * line: `proton-drive-mount <version> (<short commit> <date>)` for a release
+ * build, `proton-drive-mount <revision>` for any other. The lines under it
+ * are `key: value` details.
+ */
 export function versionAnswer(env: NodeJS.ProcessEnv = process.env): string {
-    return `proton-drive-mount ${VERSION} (rev ${buildRevision(env)}) (x-pm-appversion ${APP_VERSION}, drive-sdk js@${SDK_VERSION})`;
+    const lines = [`proton-drive-mount ${buildIdentity(env)}`, `commit-hash: ${buildRevision(env)}`];
+    if (env.PDM_BUILD_DATE) {
+        lines.push(`commit-date: ${env.PDM_BUILD_DATE}`);
+    }
+    lines.push(`x-pm-appversion: ${APP_VERSION}`, `drive-sdk: js@${SDK_VERSION}`);
+    return lines.join('\n');
 }
 
 export interface Answer {

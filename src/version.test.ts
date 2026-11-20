@@ -6,6 +6,7 @@ import {
     CHANNEL,
     CLIENT_NAME,
     VERSION,
+    buildIdentity,
     buildRevision,
     isValidAppVersion,
 } from './version.ts';
@@ -41,5 +42,29 @@ describe('version', () => {
 
     test('buildRevision says unknown outside the Nix build', () => {
         expect(buildRevision({})).toBe('unknown');
+    });
+
+    test('a git build gives its full revision in place of a version', () => {
+        const rev = 'c'.repeat(40);
+        expect(buildIdentity({ PDM_BUILD_REVISION: rev })).toBe(rev);
+        expect(buildIdentity({ PDM_BUILD_REVISION: `${rev}-dirty` })).toBe(`${rev}-dirty`);
+    });
+
+    test('a build outside Nix gives unknown', () => {
+        expect(buildIdentity({})).toBe('unknown');
+    });
+
+    test('a release build gives the stamped version, the short commit and the commit date', () => {
+        const env = {
+            PDM_BUILD_REVISION: '0123abc' + 'd'.repeat(33),
+            PDM_BUILD_VERSION: '1.2.0',
+            PDM_BUILD_DATE: '2026-10-13',
+        };
+        expect(buildIdentity(env)).toBe('1.2.0 (0123abc 2026-10-13)');
+    });
+
+    test('a version without a date is not a release stamp', () => {
+        const rev = 'e'.repeat(40);
+        expect(buildIdentity({ PDM_BUILD_REVISION: rev, PDM_BUILD_VERSION: '1.2.0' })).toBe(rev);
     });
 });
