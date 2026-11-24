@@ -91,6 +91,14 @@
       ]
     },
     {
+      "id": "a-stamped-build-sends-its-release-version-to-proton",
+      "path": "spec/features/identity.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the answer's x-pm-appversion names the version \"([^\"]*)\"$"
+      ]
+    },
+    {
       "id": "the-mount-shows-drive-files-as-files",
       "path": "spec/features/mount.feature",
       "expected_status": "green"

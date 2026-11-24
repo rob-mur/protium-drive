@@ -80,9 +80,16 @@ export class Binary {
     return executable(join(dirname(this.path), name));
   }
 
-  /** Runs a command that ends on its own, and waits up to 30 s for it. */
-  run(args: string[], home?: Home): Answer {
-    const result = spawnSync(this.path, args, { encoding: "utf8", timeout: 30_000, env: environment(home) });
+  /**
+   * Runs a command that ends on its own, and waits up to 30 s for it. `variables` are set in its
+   * environment on top of the suite's, as `start` sets them.
+   */
+  run(args: string[], home?: Home, variables: Record<string, string> = {}): Answer {
+    const result = spawnSync(this.path, args, {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...environment(home), ...variables },
+    });
     if (result.error) throw result.error;
     return { exitCode: result.status ?? -1, stdout: result.stdout, stderr: result.stderr };
   }

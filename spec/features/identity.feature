@@ -26,3 +26,11 @@ Feature: The binary says which build it is
     Given the protium-drive binary built from the deployed revision
     When the user asks the binary for its help
     Then the first line of the help names "protium-drive"
+
+  # A release build's wrapper sets PDM_BUILD_VERSION and PDM_BUILD_DATE from .cd-release.json.
+  # Proton blocks a bad release by the version in x-pm-appversion, so the header must carry it.
+  @id:a-stamped-build-sends-its-release-version-to-proton
+  Scenario: A release build names its stamped version in the client Proton sees
+    Given the protium-drive binary built from the deployed revision
+    When the user asks the binary for its version with the release stamp "1.2.3" of "2026-10-13"
+    Then the answer's x-pm-appversion names the version "1.2.3"
