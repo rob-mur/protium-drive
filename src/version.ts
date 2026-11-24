@@ -12,13 +12,31 @@ export const VERSION: string = packageJson.version;
 export const CLIENT_NAME = 'protondrivemount';
 export const CHANNEL = 'alpha';
 
-export const APP_VERSION = `external-drive-${CLIENT_NAME}@${VERSION}-${CHANNEL}`;
-
 const APP_VERSION_PATTERN = /^external-drive-[a-z_]+@\d+\.\d+\.\d+(-(stable|beta|alpha))?(\+[0-9A-Za-z.-]+)?$/;
 
 export function isValidAppVersion(value: string): boolean {
     return APP_VERSION_PATTERN.test(value);
 }
+
+/**
+ * The `x-pm-appversion` value. Proton blocks a bad release by the version in
+ * this header, so a release build sends the version from its stamp
+ * (`PDM_BUILD_VERSION`, which the Nix wrapper sets from `.cd-release.json`).
+ * A build with no stamp, or with a stamp that would break the SDK shape,
+ * sends the package.json version.
+ */
+export function appVersion(env: NodeJS.ProcessEnv = process.env): string {
+    const stamped = env.PDM_BUILD_VERSION;
+    if (stamped) {
+        const value = `external-drive-${CLIENT_NAME}@${stamped}-${CHANNEL}`;
+        if (isValidAppVersion(value)) {
+            return value;
+        }
+    }
+    return `external-drive-${CLIENT_NAME}@${VERSION}-${CHANNEL}`;
+}
+
+export const APP_VERSION = appVersion();
 
 /**
  * The git revision the Nix build embedded, via `--set PDM_BUILD_REVISION` in

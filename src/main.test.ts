@@ -79,6 +79,11 @@ describe('--version', () => {
         expect(lines).toContain(`drive-sdk: js@${SDK_VERSION}`);
     });
 
+    test('a release build names its stamped version in the client Proton sees', () => {
+        const lines = run(['--version'], { ...ENV, PDM_BUILD_VERSION: '1.2.3', PDM_BUILD_DATE: '2026-10-13' }).stdout.split('\n');
+        expect(lines).toContain('x-pm-appversion: external-drive-protondrivemount@1.2.3-alpha');
+    });
+
     test('a build with no known commit says unknown', () => {
         const lines = run(['--version'], {}).stdout.split('\n');
         expect(lines[0]).toBe('proton-drive-mount unknown');

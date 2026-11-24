@@ -6,6 +6,7 @@ import {
     CHANNEL,
     CLIENT_NAME,
     VERSION,
+    appVersion,
     buildIdentity,
     buildRevision,
     isValidAppVersion,
@@ -21,6 +22,25 @@ describe('version', () => {
             `external-drive-${CLIENT_NAME}@${VERSION}-${CHANNEL}`,
         );
         expect(isValidAppVersion(APP_VERSION)).toBe(true);
+    });
+
+    test('a release build sends its stamped version to Proton', () => {
+        expect(appVersion({ PDM_BUILD_VERSION: '1.2.3', PDM_BUILD_DATE: '2026-10-13' })).toBe(
+            `external-drive-${CLIENT_NAME}@1.2.3-${CHANNEL}`,
+        );
+    });
+
+    test('a build with no release stamp sends the package.json version', () => {
+        expect(appVersion({})).toBe(`external-drive-${CLIENT_NAME}@${packageJson.version}-${CHANNEL}`);
+        expect(appVersion({ PDM_BUILD_VERSION: '' })).toBe(appVersion({}));
+    });
+
+    test('a stamped version that would break the SDK shape falls back to the package.json version', () => {
+        for (const stamp of ['1.2', 'v1.2.3', '1.2.3-rc1', '1.2.3 ', 'latest']) {
+            const value = appVersion({ PDM_BUILD_VERSION: stamp });
+            expect(value).toBe(appVersion({}));
+            expect(isValidAppVersion(value)).toBe(true);
+        }
     });
 
     test('the client name is never a Proton or rclone client name', () => {

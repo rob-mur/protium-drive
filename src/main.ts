@@ -22,7 +22,7 @@ import { systemKeyring, type Keyring } from './proton/keyring.ts';
 import { cacheSettings, DEFAULT_CACHE, mountCommand, mountDeps } from './mount.ts';
 import { serveCommand, DEFAULT_HOST, DEFAULT_PORT } from './serve.ts';
 import { readCredentialFile } from './credential-file.ts';
-import { APP_VERSION, buildIdentity, buildRevision } from './version.ts';
+import { appVersion, buildIdentity, buildRevision } from './version.ts';
 
 export { THIRD_PARTY_NOTICE };
 
@@ -110,7 +110,7 @@ export function versionAnswer(env: NodeJS.ProcessEnv = process.env): string {
     if (env.PDM_BUILD_DATE) {
         lines.push(`commit-date: ${env.PDM_BUILD_DATE}`);
     }
-    lines.push(`x-pm-appversion: ${APP_VERSION}`, `drive-sdk: js@${SDK_VERSION}`);
+    lines.push(`x-pm-appversion: ${appVersion(env)}`, `drive-sdk: js@${SDK_VERSION}`);
     return lines.join('\n');
 }
 
