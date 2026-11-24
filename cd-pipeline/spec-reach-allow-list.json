@@ -1,0 +1,6 @@
+[
+  { "glob": "bun.lock", "reason": "a lockfile: no coverage tool instruments it, and no scenario loads it as code" },
+  { "glob": "package.json", "reason": "package metadata: bun inlines it as data, so the coverage report names no lines of it" },
+  { "glob": "flake.nix", "reason": "a Nix build expression: it runs at build time, not in the binary the frozen suite runs, so no coverage tool instruments it" },
+  { "glob": "nix/package.nix", "reason": "a Nix build expression: it runs at build time, not in the binary the frozen suite runs, so no coverage tool instruments it" }
+]
