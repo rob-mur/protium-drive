@@ -1,5 +1,7 @@
 {
   pkgs,
+  lib,
+  config,
   ...
 }:
 
@@ -39,6 +41,10 @@
         revisionVariable = "PDM_REVISION";
       };
     };
+
+    # Spec reach on a merge request: cd-pipeline's own script runs the frozen suite against the
+    # member built with coverage and writes the LCOV that ci:acceptance:spec-reach reads.
+    coverage.run = [ (lib.getExe config.cd-pipeline.coverage.scripts.javascript.cucumber-js) ];
 
     verbs = {
       commit.tasks.workflows.exec = ''
