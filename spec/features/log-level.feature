@@ -6,7 +6,7 @@ Feature: One log level for the binary and the rclone it runs
 
   @id:the-help-documents-the-log-level
   Scenario: The help documents the log level option and PDM_LOG_LEVEL
-    Given the proton-drive-mount binary built from the deployed revision
+    Given the protium-drive binary built from the deployed revision
     When the user asks the binary for its help
     Then the help lists --log-level with the levels debug, info, warn and error, and names PDM_LOG_LEVEL under Environment
 

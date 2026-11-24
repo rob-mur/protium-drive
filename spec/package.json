@@ -1,5 +1,5 @@
 {
-  "name": "proton-drive-mount-spec",
+  "name": "protium-drive-spec",
   "private": true,
   "type": "module",
   "dependencies": {

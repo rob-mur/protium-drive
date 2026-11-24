@@ -67,9 +67,28 @@
       "expected_status": "green"
     },
     {
-      "id": "a-git-build-gives-its-revision-as-its-version",
+      "id": "a-git-build-gives-protium-drive-and-its-revision-as-its-version",
       "path": "spec/features/identity.feature",
-      "expected_status": "green"
+      "expected_status": "red",
+      "failing_step": [
+        "^the first line of the answer is \"([^\"]*)\" and the revision it was built from$"
+      ]
+    },
+    {
+      "id": "the-package-installs-the-binary-as-protium-drive",
+      "path": "spec/features/identity.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the package's bin folder holds the executable \"([^\"]*)\"$"
+      ]
+    },
+    {
+      "id": "the-help-names-protium-drive",
+      "path": "spec/features/identity.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the first line of the help names \"([^\"]*)\"$"
+      ]
     },
     {
       "id": "the-mount-shows-drive-files-as-files",
@@ -107,9 +126,12 @@
       "expected_status": "green"
     },
     {
-      "id": "a-serve-without-a-session-exits-as-needing-login",
+      "id": "a-serve-without-a-session-exits-asking-for-protium-drive-auth-login",
       "path": "spec/features/needs-login.feature",
-      "expected_status": "green"
+      "expected_status": "red",
+      "failing_step": [
+        "^the serve exits (\\d+) saying \"(.*)\"$"
+      ]
     },
     {
       "id": "a-serve-on-a-refused-session-exits-as-needing-login",
@@ -117,9 +139,12 @@
       "expected_status": "green"
     },
     {
-      "id": "a-session-refused-mid-run-stops-the-serve-as-needing-login",
+      "id": "a-session-refused-mid-run-stops-the-serve-asking-for-protium-drive-auth-login",
       "path": "spec/features/needs-login.feature",
-      "expected_status": "green"
+      "expected_status": "red",
+      "failing_step": [
+        "^the serve exits (\\d+) saying \"(.*)\"$"
+      ]
     },
     {
       "id": "signing-in-while-the-serve-runs-is-refused",
@@ -220,9 +245,12 @@
       "expected_status": "green"
     },
     {
-      "id": "a-mount-without-a-session-exits-as-needing-login",
+      "id": "a-mount-without-a-session-exits-asking-for-protium-drive-auth-login",
       "path": "spec/features/needs-login.feature",
-      "expected_status": "green"
+      "expected_status": "red",
+      "failing_step": [
+        "^the mount exits (\\d+) saying \"(.*)\"$"
+      ]
     },
     {
       "id": "a-mount-on-a-refused-session-exits-as-needing-login",

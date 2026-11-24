@@ -1,9 +1,10 @@
-// The Send arm's command-line half. It runs the proton-drive-mount binary the way a user runs it,
+// The Send arm's command-line half. It runs the protium-drive binary the way a user runs it,
 // and nothing else in the suite starts a process of the product. The acceptance task builds the
 // package from the deployed revision and names its executable and that revision in the
 // environment, so no step definition names a path or a rev.
 import { spawnSync } from "node:child_process";
 import { accessSync, constants } from "node:fs";
+import { dirname, join } from "node:path";
 
 import { type Running, start } from "@cd-pipeline/support";
 
@@ -58,7 +59,7 @@ export class Binary {
     const path = env.PDM_BINARY;
     if (!path) {
       throw new Error(
-        "PDM_BINARY is unset: the acceptance task sets it to bin/proton-drive-mount of the package built from the deployed revision",
+        "PDM_BINARY is unset: the acceptance task sets it to an executable in bin/ of the package built from the deployed revision",
       );
     }
     const revision = env.PDM_REVISION;
@@ -71,12 +72,12 @@ export class Binary {
   }
 
   isExecutable(): boolean {
-    try {
-      accessSync(this.path, constants.X_OK);
-      return true;
-    } catch {
-      return false;
-    }
+    return executable(this.path);
+  }
+
+  /** Whether the package's bin folder, the one this executable sits in, holds an executable `name`. */
+  installs(name: string): boolean {
+    return executable(join(dirname(this.path), name));
   }
 
   /** Runs a command that ends on its own, and waits up to 30 s for it. */
@@ -92,6 +93,15 @@ export class Binary {
    */
   start(args: string[], home?: Home, variables: Record<string, string> = {}): Running {
     return start(this.path, args, { env: { ...environment(home), ...variables } });
+  }
+}
+
+function executable(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
   }
 }
 

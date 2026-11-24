@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "proton-drive-mount-spec",
+      "name": "protium-drive-spec",
       "dependencies": {
         "@cd-pipeline/support": "file:../.devenv/cd-pipeline/typescript",
       },

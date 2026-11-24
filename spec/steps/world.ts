@@ -211,7 +211,7 @@ export class DriveWorld extends World {
     try {
       return this.binary.run(args, this.dirs.home);
     } catch (error: unknown) {
-      return { exitCode: -1, stdout: "", stderr: `'proton-drive-mount ${args.join(" ")}' did not run: ${String(error)}` };
+      return { exitCode: -1, stdout: "", stderr: `'protium-drive ${args.join(" ")}' did not run: ${String(error)}` };
     }
   }
 
