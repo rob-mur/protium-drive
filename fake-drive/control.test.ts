@@ -11,6 +11,7 @@ import { FakeClock } from './clock.ts';
 import { type ControlChannel, startControlChannel } from './control.ts';
 import { FakeDrive, FakeDriveClient, SCOPE_ID } from './drive.ts';
 import { Faults } from './faults.ts';
+import { Requirements } from './requirements.ts';
 
 let dir: string;
 let drive: FakeDrive;
@@ -271,10 +272,63 @@ describe('the control channel of the clock, the faults and the account', () => {
         });
     });
 
-    test('a channel started with no clock, faults or account has none of their routes', async () => {
-        for (const [method, path] of [['GET', '/clock'], ['POST', '/clock/advance'], ['GET', '/faults'], ['POST', '/faults'], ['GET', '/account'], ['POST', '/account/approve']]) {
+    test('a channel started with no clock, faults, account or requirements has none of their routes', async () => {
+        for (const [method, path] of [
+            ['GET', '/clock'],
+            ['POST', '/clock/advance'],
+            ['GET', '/faults'],
+            ['POST', '/faults'],
+            ['GET', '/account'],
+            ['POST', '/account/approve'],
+            ['GET', '/requirements'],
+            ['POST', '/requirements'],
+        ]) {
             expect((await fetch(new URL(path!, control.url), { method })).status).toBe(404);
         }
+    });
+});
+
+describe('the control channel of the requirements', () => {
+    let requirements: Requirements;
+    let channel: ControlChannel;
+
+    beforeEach(() => {
+        requirements = new Requirements();
+        client = new FakeDriveClient(drive, { requirements });
+        channel = startControlChannel(drive, client, { requirements });
+    });
+
+    afterEach(async () => {
+        await channel.stop();
+    });
+
+    const at = (path: string) => new URL(path, channel.url);
+    const send = (body: unknown) => fetch(at('/requirements'), { method: 'POST', body: JSON.stringify(body) });
+
+    test('sets the requirements, reads them back, and refuses one that is not a requirement', async () => {
+        expect(await json(fetch(at('/requirements')))).toEqual({});
+        expect(await json(send({ drive: 2, required: '99.0.0' }))).toEqual({ drive: 2, required: '99.0.0' });
+        expect(await json(fetch(at('/requirements')))).toEqual({ drive: 2, required: '99.0.0' });
+        const refused = await send({ required: 'soon' });
+        expect(refused.status).toBe(400);
+        expect(await refused.json()).toEqual({ error: 'required is not a version such as 1.2.3' });
+    });
+
+    test('passes each response hook the headers after each call once they are set, and none before', async () => {
+        const seen: (string | null)[][] = [];
+        client.onResponse((request, _options, response) => {
+            seen.push([new URL(request.url).pathname, response.headers.get('x-pm-drive-requirements'), response.headers.get('x-pm-drive-platform-requirements')]);
+        });
+        await client.getMyFilesRootFolder();
+        expect(seen).toEqual([]);
+
+        await send({ photos: 2, suggested: '99.0.0' });
+        await client.getMyFilesRootFolder();
+        expect(seen).toEqual([['/getMyFilesRootFolder', 'photos=2', 'suggested=99.0.0']]);
+
+        await send({});
+        await client.getMyFilesRootFolder();
+        expect(seen).toHaveLength(1);
     });
 });
 

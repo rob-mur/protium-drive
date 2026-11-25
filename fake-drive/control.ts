@@ -27,8 +27,18 @@
  *   POST /account/expire               -> {expired}: expires the access token of every session
  *   POST /account/refuse-next-refresh  -> {refuseNextRefresh: true}
  *
+ * With the requirements (the Receive arm always has them):
+ *
+ *   GET  /requirements                 what Proton's requirement headers say now (RequirementSpec)
+ *   POST /requirements  {drive?, photos?, docs?, required?, suggested?}  -> the RequirementSpec set
+ *                   Replaces what was set; `{}` sets nothing. drive, photos and docs are the feature
+ *                   mask Proton requires for that scope; required and suggested are SDK versions
+ *                   such as "99.0.0". After each SDK call, the product's response hooks get a
+ *                   response that carries them as Proton's headers (requirements.ts).
+ *
  * Errors: 404 for no node at the path or an unknown route, 409 for a name that is taken or an
- * approval with no sign-in waiting, 400 for a bad request or a fault that cannot occur. Each error
+ * approval with no sign-in waiting, 400 for a bad request, a fault that cannot occur or a
+ * requirement that is not one. Each error
  * body is `{error}`.
  */
 import { NodeWithSameNameExistsValidationError, ValidationError } from '@protontech/drive-sdk';
@@ -38,6 +48,7 @@ import type { FakeClock } from './clock.ts';
 import { type AddSpec, type FakeDrive, type FakeDriveClient, NoSuchNodeError } from './drive.ts';
 import { type Fault, FaultError, type Faults } from './faults.ts';
 import type { NodeKeyKind } from './node-keys.ts';
+import { RequirementError, type Requirements } from './requirements.ts';
 
 export type ControlChannel = {
     /** `http://127.0.0.1:<port>/` */
@@ -51,6 +62,7 @@ export type ControlExtras = {
     clock?: FakeClock;
     faults?: Faults;
     account?: FakeAccount;
+    requirements?: Requirements;
 };
 
 type Route = (request: Request, url: URL) => Promise<Response> | Response;
@@ -84,6 +96,7 @@ export function startControlChannel(drive: FakeDrive, client: FakeDriveClient, e
         ...clockRoutes(extras.clock),
         ...faultRoutes(extras.faults),
         ...accountRoutes(extras.account),
+        ...requirementRoutes(extras.requirements),
     };
 
     const server = Bun.serve({
@@ -99,7 +112,7 @@ export function startControlChannel(drive: FakeDrive, client: FakeDriveClient, e
                 const message = error instanceof Error ? error.message : String(error);
                 if (error instanceof NoSuchNodeError) return failure(404, message);
                 if (error instanceof NodeWithSameNameExistsValidationError || error instanceof Conflict) return failure(409, message);
-                if (error instanceof BadRequest || error instanceof ValidationError || error instanceof FaultError) return failure(400, message);
+                if (error instanceof BadRequest || error instanceof ValidationError || error instanceof FaultError || error instanceof RequirementError) return failure(400, message);
                 return failure(500, message);
             }
         },
@@ -150,6 +163,14 @@ function accountRoutes(account: FakeAccount | undefined): Record<string, Route> 
             account.refuseNextRefresh();
             return Response.json({ refuseNextRefresh: true });
         },
+    };
+}
+
+function requirementRoutes(requirements: Requirements | undefined): Record<string, Route> {
+    if (!requirements) return {};
+    return {
+        'GET /requirements': () => Response.json(requirements.current()),
+        'POST /requirements': async (request) => Response.json(requirements.set(await jsonBody(request))),
     };
 }
 

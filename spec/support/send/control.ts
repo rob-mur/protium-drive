@@ -64,6 +64,18 @@ export interface Fault {
   path: string;
 }
 
+/**
+ * What Proton's requirement headers say (`RequirementSpec` in fake-drive/requirements.ts): the
+ * feature mask each scope requires, and the SDK version Proton requires or suggests.
+ */
+export interface Requirements {
+  drive?: number;
+  photos?: number;
+  docs?: number;
+  required?: string;
+  suggested?: string;
+}
+
 /** The control channel answered with an error, or did not answer. */
 export class ControlError extends Error {
   override name = "ControlError";
@@ -135,6 +147,11 @@ export class Control {
 
   addFault(fault: Fault): Promise<{ pending: Fault[] }> {
     return this.json("POST", "faults", undefined, fault);
+  }
+
+  /** Has each later SDK call answer with Proton's requirement headers saying `requirements`. */
+  setRequirements(requirements: Requirements): Promise<Requirements> {
+    return this.json("POST", "requirements", undefined, requirements);
   }
 
   account(): Promise<AccountReport> {

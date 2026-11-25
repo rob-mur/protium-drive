@@ -12,6 +12,9 @@
  *   with its own `SessionCredentials`, and uses the `auth` and `apiClient` it returns (account.ts).
  * - `clock` is the `now()` and the timers to use in place of the real ones (clock.ts). The Drive's
  *   event scheduler runs on it too.
+ * - `onResponse(hook)` runs `hook` after each call of `client`, as ky runs an `afterResponse` hook,
+ *   with a response that carries the requirement headers the control channel set
+ *   (requirements.ts). Nothing runs while none is set.
  * - `controlUrl` is the control channel (see control.ts), on 127.0.0.1 at a port the system
  *   allocates. The Receive arm prints it as one line that matches `CONTROL_LINE`, on stderr
  *   unless `print` says otherwise.
@@ -25,6 +28,7 @@ import { type Clock, FakeClock } from './clock.ts';
 import { type ControlChannel, startControlChannel } from './control.ts';
 import { FakeDrive, FakeDriveClient, type SdkSurface } from './drive.ts';
 import { Faults } from './faults.ts';
+import { Requirements, type ResponseHook } from './requirements.ts';
 
 /** The line the Receive arm prints; group 1 is the control channel's URL. */
 export const CONTROL_LINE = /^fake-drive: control channel at (http:\/\/127\.0\.0\.1:\d+\/)$/m;
@@ -33,6 +37,7 @@ export type ReceiveArm = {
     client: SdkSurface;
     account: Pick<FakeAccount, 'initAccount'>;
     clock: Clock;
+    onResponse(hook: ResponseHook): void;
     controlUrl: URL;
     stop(): Promise<void>;
 };
@@ -48,10 +53,11 @@ export async function startReceiveArm(dir: string, options: ReceiveArmOptions = 
     const clock = new FakeClock();
     const account = FakeAccount.open(dir, clock);
     const faults = new Faults();
-    const client = new FakeDriveClient(drive, { account, clock, faults });
-    const control: ControlChannel = startControlChannel(drive, client, { account, clock, faults });
+    const requirements = new Requirements();
+    const client = new FakeDriveClient(drive, { account, clock, faults, requirements });
+    const control: ControlChannel = startControlChannel(drive, client, { account, clock, faults, requirements });
     print(`fake-drive: control channel at ${control.url.href}`);
-    return { client, account, clock, controlUrl: control.url, stop: control.stop };
+    return { client, account, clock, onResponse: (hook) => client.onResponse(hook), controlUrl: control.url, stop: control.stop };
 }
 
 if (import.meta.main) {

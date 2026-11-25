@@ -1,9 +1,10 @@
 // The steps about the log level: the option and the variable the user sets it with, what the help
-// says of them, and the lines the serve, the mount and the rclone it runs write to stderr.
+// says of them, and the lines the serve, the mount and the rclone it runs write to stderr; and the
+// warnings the serve writes when Proton's requirement headers ask for a newer build.
 import { Given, Then, When } from "@cucumber/cucumber";
 
 import { Control } from "../support/send/control.ts";
-import { claim, last, succeeded } from "./claims.ts";
+import { claim, last, succeeded, sum } from "./claims.ts";
 import { type DriveWorld, LOG_LEVEL_FLAG, LOG_LEVEL_VARIABLE } from "./world.ts";
 
 /** The levels the user can give, lowest first. */
@@ -127,6 +128,35 @@ Then(/^the mount exited with status 2, naming "([^"]*)", and served nothing$/, f
   claim(ending.code === 2, () => `the mount exited with ${ending.code ?? ending.signal}, not 2.\n${this.whatHappened()}`);
   claim(mount.process.stderr.includes(value), () => `the mount's message does not name "${value}".\n${this.whatHappened()}`);
   claim(Control.fromOutput(mount.process.output) === undefined, () => `the mount started the serve before it refused.\n${this.whatHappened()}`);
+});
+
+/** The serve's warnings that say `text`, once the serve has written one or LINES_MS has passed. */
+async function warningsSaying(world: DriveWorld, text: string): Promise<string[]> {
+  const serve = world.serve;
+  claim(serve, () => `the serve was never started.\n${world.whatHappened()}`);
+  const saying = () => ownLines(serve.process.stderr, "warn").filter((line) => line.includes(text));
+  await serve.process.waitFor(() => saying().length > 0, LINES_MS);
+  return saying();
+}
+
+Then(/^the serve warned once "([^"]*)", (ending|without) "([^"]*)"$/, async function (this: DriveWorld, text: string, how: string, rest: string) {
+  const warnings = await warningsSaying(this, text);
+  claim(warnings.length > 0, () => `the serve wrote no warning that says "${text}".\n${this.whatHappened()}`);
+  claim(warnings.length === 1, () => `the serve warned "${text}" ${warnings.length} times, not once:\n${warnings.join("\n")}\n${this.whatHappened()}`);
+  const warning = warnings[0]!;
+  if (how === "ending") claim(warning.endsWith(rest), () => `the serve's warning does not end "${rest}":\n${warning}\n${this.whatHappened()}`);
+  else claim(!warning.includes(rest), () => `the serve's warning says "${rest}":\n${warning}\n${this.whatHappened()}`);
+});
+
+Then(/^the serve warned once "([^"]*)", though more than one Drive call met the requirement$/, async function (this: DriveWorld, text: string) {
+  const warnings = await warningsSaying(this, text);
+  claim(warnings.length > 0, () => `the serve wrote no warning that says "${text}".\n${this.whatHappened()}`);
+  claim(warnings.length === 1, () => `the serve warned "${text}" ${warnings.length} times, not once:\n${warnings.join("\n")}\n${this.whatHappened()}`);
+  const first = this.actions[0]?.callsBefore;
+  const after = this.actions.at(-1)?.callsAfter;
+  claim(first && after, () => `the Drive's call counts were not read around the listings.\n${this.whatHappened()}`);
+  const calls = sum(after.methods) - sum(first.methods);
+  claim(calls > 1, () => `the listings made ${calls} Drive call(s), so the warning could not have come twice.\n${this.whatHappened()}`);
 });
 
 Then(/^the listing succeeds, and the serve wrote no debug or info lines$/, function (this: DriveWorld) {

@@ -49,6 +49,7 @@ import {
 import { type Clock, FakeClock, type TimerHandle } from './clock.ts';
 import { type Fault, faultError, type FaultKind, type Faults, type Operation } from './faults.ts';
 import { armoredNodeKey, type NodeKeyKind, nodeKeyVersion } from './node-keys.ts';
+import type { Requirements, ResponseHook } from './requirements.ts';
 import { StateFile } from './state-file.ts';
 
 /** The part of `ProtonDriveClient` the product uses: the prototype's `DriveSdk` pick. */
@@ -525,6 +526,8 @@ export type FakeDriveClientOptions = {
     clock?: Clock;
     /** Checked first on every call (account.ts). When absent, every call is authorized. */
     account?: DriveAuthorizer;
+    /** The requirement headers each call's response carries (requirements.ts). None when absent. */
+    requirements?: Requirements;
 };
 
 /**
@@ -539,6 +542,7 @@ export class FakeDriveClient implements SdkSurface {
     private readonly counts: CallCounts = { methods: {}, listings: {}, nodeLoads: {}, downloads: {} };
     /** The calls that wait under an `upload-queued` fault, each by the function that gives it its turn. */
     private readonly waitingForTurn = new Set<() => void>();
+    private readonly responseHooks: ResponseHook[] = [];
 
     constructor(
         private readonly drive: FakeDrive,
@@ -547,6 +551,14 @@ export class FakeDriveClient implements SdkSurface {
 
     calls(): CallCounts {
         return structuredClone(this.counts);
+    }
+
+    /**
+     * Runs `hook` after each call, as ky runs an `afterResponse` hook, with a response that
+     * carries the requirement headers set (requirements.ts). A call runs no hook while none is set.
+     */
+    onResponse(hook: ResponseHook): void {
+        this.responseHooks.push(hook);
     }
 
     /** Polls every scope of every scheduler the product asked for, as the SDK's timer would. Returns the scopes polled. */
@@ -696,15 +708,26 @@ export class FakeDriveClient implements SdkSurface {
     }
 
     /**
-     * What every call does after it is counted: it checks the account, then meets the first fault
-     * set for `operation` on one of `targets`. A fault that is an error is thrown here; a fault
-     * the call acts on (`integrity`, and the upload kinds) is returned.
+     * What every call does after it is counted: it checks the account, passes the response hooks
+     * the requirement headers set, then meets the first fault set for `operation` on one of
+     * `targets`. A fault that is an error is thrown here; a fault the call acts on (`integrity`,
+     * and the upload kinds) is returned.
      */
     private async enter(operation: Operation, ...targets: (string | undefined)[]): Promise<Fault | undefined> {
         await this.options.account?.authorize();
+        await this.respond(operation);
         const fault = this.options.faults?.take(operation, targets);
         if (!fault || ACTED_ON.has(fault.kind)) return fault;
         throw faultError(fault.kind);
+    }
+
+    /** Passes each response hook a response that carries the requirement headers set, if any are. */
+    private async respond(operation: Operation): Promise<void> {
+        const headers = this.options.requirements?.headers();
+        if (!headers) return;
+        for (const hook of this.responseHooks) {
+            await hook(new Request(`https://fake-drive.invalid/${operation}`), {}, new Response(null, { headers }));
+        }
     }
 
     /** The targets of a call that creates `name` in the folder `parentUid`: the folder, and the new path. */

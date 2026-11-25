@@ -99,6 +99,16 @@ describe('the Receive arm', () => {
         expect(credentials.saved?.refreshToken).toBe('refresh-2');
     });
 
+    test('gives its response hooks the requirement headers its control channel sets', async () => {
+        const { arm } = await start();
+        const platform: (string | null)[] = [];
+        arm.onResponse((_request, _options, response) => void platform.push(response.headers.get('x-pm-drive-platform-requirements')));
+        await arm.client.getMyFilesRootFolder();
+        await fetch(new URL('/requirements', arm.controlUrl), { method: 'POST', body: JSON.stringify({ required: '99.0.0' }) });
+        await arm.client.getMyFilesRootFolder();
+        expect(platform).toEqual(['required=99.0.0']);
+    });
+
     test('a session saved by one start is accepted by the next start on the same DIR', async () => {
         const first = (await start()).arm;
         const credentials = new SavedCredentials();

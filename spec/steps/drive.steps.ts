@@ -76,6 +76,20 @@ Given(/^the Drive refuses the next upload into "([^"]*)" because the name exists
   fault(this, "name-clash", "getFileUploader", folder);
 });
 
+// --- what Proton's requirement headers say on each Drive call of the serve ---------------
+
+Given(/^Proton requires SDK (\d+\.\d+\.\d+) or newer$/, function (this: DriveWorld, version: string) {
+  this.requirements.required = version;
+});
+
+Given(/^Proton suggests SDK (\d+\.\d+\.\d+) or newer$/, function (this: DriveWorld, version: string) {
+  this.requirements.suggested = version;
+});
+
+Given(/^Proton requires the (drive|photos|docs) feature mask (\d+)$/, function (this: DriveWorld, scope: "drive" | "photos" | "docs", mask: string) {
+  this.requirements[scope] = Number(mask);
+});
+
 // --- the account and the serve's options ------------------------------------------------
 
 Given(/^the user has signed in$/, function (this: DriveWorld) {

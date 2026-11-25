@@ -3,8 +3,8 @@
 // they never name a command line, a port or a protocol themselves.
 //
 // The rules the steps keep (rob/continuous-delivery#657):
-// - A Given arranges data on this World only: the Drive, the account, the faults. It starts no
-//   process and calls no control channel.
+// - A Given arranges data on this World only: the Drive, the account, the faults, what Proton
+//   requires. It starts no process and calls no control channel.
 // - A When acts and records what happened, and asserts nothing: it never throws. The first When
 //   that needs the product writes the arranged Drive, signs the user in (unless a Given says they
 //   have not) and starts the serve on it. A binary that does not start is a recorded outcome.
@@ -19,7 +19,7 @@ import { join } from "node:path";
 
 import { DriveSeed, parentOf } from "../support/drive-seed.ts";
 import { type Answer, Binary, type Home, indent, type Running } from "../support/send/binary.ts";
-import { type CallCounts, Control, type Fault } from "../support/send/control.ts";
+import { type CallCounts, Control, type Fault, type Requirements } from "../support/send/control.ts";
 import { listeningAddresses, type LocalAnswer, type ProcessView, processTree, rawRequest } from "../support/send/local.ts";
 import { isMounted, leaveKilledMount, listMounted, mountIds, type MountOutcome, readMounted, unmount, writeMounted } from "../support/send/mount.ts";
 import { describe as describeOutcome, type Outcome, Rclone, refusal } from "../support/send/rclone.ts";
@@ -110,6 +110,8 @@ export class DriveWorld extends World {
   readonly seed = new DriveSeed();
   signedIn = true;
   readonly faults: Fault[] = [];
+  /** What Proton's requirement headers say on each Drive call of the serve; none when empty. */
+  readonly requirements: Requirements = {};
   refusesNextRefresh = false;
   /** Proton refused the stored session before the scenario's first When. */
   sessionRefused = false;
@@ -467,9 +469,10 @@ export class DriveWorld extends World {
     return !!this.serve?.process.running && (await answersHttp(this.serve.url));
   }
 
-  /** The arranged faults and the refused refresh, set once, on the first process with a Receive arm. */
+  /** The arranged faults, the refused refresh and the requirements, set once, on the first process with a Receive arm. */
   private async setFaults(serving: Serving): Promise<void> {
-    if (this.faultsSet || (this.faults.length === 0 && !this.refusesNextRefresh)) return;
+    const requires = Object.keys(this.requirements).length > 0;
+    if (this.faultsSet || (this.faults.length === 0 && !this.refusesNextRefresh && !requires)) return;
     this.faultsSet = true;
     const control = serving.control;
     if (!control) {
@@ -478,6 +481,7 @@ export class DriveWorld extends World {
     }
     for (const fault of this.faults) await this.attempt(`setting the fault ${JSON.stringify(fault)}`, () => control.addFault(fault));
     if (this.refusesNextRefresh) await this.attempt("making the account refuse the next refresh", () => control.refuseNextRefresh());
+    if (requires) await this.attempt(`setting the requirements ${JSON.stringify(this.requirements)}`, () => control.setRequirements(this.requirements));
   }
 
   // --- a WebDAV client ------------------------------------------------------------
