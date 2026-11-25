@@ -342,34 +342,22 @@
     {
       "id": "a-required-sdk-update-tells-the-user-to-update",
       "path": "spec/features/proton-requirements.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the serve warned once \"([^\"]*)\", (ending|without) \"([^\"]*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-suggested-sdk-update-warns-without-requiring-an-update",
       "path": "spec/features/proton-requirements.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the serve warned once \"([^\"]*)\", (ending|without) \"([^\"]*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "an-unsupported-drive-feature-tells-the-user-to-update",
       "path": "spec/features/proton-requirements.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the serve warned once \"([^\"]*)\", (ending|without) \"([^\"]*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-requirement-warning-comes-once-however-many-calls-meet-it",
       "path": "spec/features/proton-requirements.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the serve warned once \"([^\"]*)\", though more than one Drive call met the requirement$"
-      ]
+      "expected_status": "green"
     }
   ]
 }
