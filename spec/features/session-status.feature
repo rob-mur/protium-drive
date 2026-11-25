@@ -24,3 +24,9 @@ Feature: The sign-in status and signing out
     Given the user has not signed in
     When the user starts signing in, and 3 sign-in links time out unapproved
     Then signing in prints 3 different sign-in links, exits 1, and the state directory holds no "session.json"
+
+  @id:the-status-without-a-session-asks-for-protium-drive-auth-login
+  Scenario: The sign-in status without a session tells the user to sign in
+    Given the user has not signed in
+    When the user asks for the sign-in status
+    Then the command exits 1 saying "protium-drive auth login"

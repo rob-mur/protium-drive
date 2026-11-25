@@ -57,6 +57,14 @@ Then(
   },
 );
 
+// --- a command that ends on its own -------------------------------------------------------------
+
+Then(/^the command exits (\d+) saying "(.*)"$/, function (this: DriveWorld, code: string, text: string) {
+  const answer = this.lastAnswer();
+  claim(answered(this).includes(text), () => `the command did not say "${text}"; it answered:\n${indent(answered(this).trim())}\n${this.whatHappened()}`);
+  claim(answer.exitCode === Number(code), () => `the command said "${text}" but exited ${answer.exitCode}, not ${code}.\n${this.whatHappened()}`);
+});
+
 // --- the needs-login status and the state lock --------------------------------------------------
 
 Then(/^the serve exits (\d+) saying "(.*)"$/, async function (this: DriveWorld, code: string, text: string) {

@@ -26,6 +26,10 @@ When(/^the user starts signing in, and (\d+) sign-in links time out unapproved$/
   await this.signInThroughTimeouts(Number(links), false);
 });
 
+When(/^the user asks for the sign-in status$/, async function (this: DriveWorld) {
+  await this.askStatus();
+});
+
 // --- the serve ------------------------------------------------------------------------------
 
 When(/^the user starts the serve$/, async function (this: DriveWorld) {
@@ -66,6 +70,10 @@ When(/^the user writes "([^"]*)" to "([^"]*)"$/, async function (this: DriveWorl
 
 When(/^the user migrates the node keys under "([^"]*)"$/, async function (this: DriveWorld, path: string) {
   await this.migrateNodeKeys(path);
+});
+
+When(/^the user starts a node-key migration without naming a folder$/, function (this: DriveWorld) {
+  this.answer = this.runBinary(["migrate-node-keys", "--state-dir", this.dirs.state]);
 });
 
 // --- the rest of the world ------------------------------------------------------------------

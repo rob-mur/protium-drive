@@ -9,3 +9,8 @@ Feature: Files whose node key rclone 1.75.0 locked with Argon2
     Then "Photos/beach.jpg" contains "sand and sea", has a v4 node key and keeps its modification time
     And the Drive's trash holds the old "beach.jpg"
     And "Photos/dune.jpg" is the same node as before
+
+  @id:a-migration-without-a-folder-shows-the-protium-drive-usage
+  Scenario: A node-key migration that names no folder shows how to use it
+    When the user starts a node-key migration without naming a folder
+    Then the command exits 2 saying "Usage: protium-drive migrate-node-keys FOLDER"

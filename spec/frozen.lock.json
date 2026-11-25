@@ -346,6 +346,22 @@
       "id": "a-serve-refuses-a-credential-file-other-users-can-read",
       "path": "spec/features/local-access.feature",
       "expected_status": "green"
+    },
+    {
+      "id": "the-status-without-a-session-asks-for-protium-drive-auth-login",
+      "path": "spec/features/session-status.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the command exits (\\d+) saying \"(.*)\"$"
+      ]
+    },
+    {
+      "id": "a-migration-without-a-folder-shows-the-protium-drive-usage",
+      "path": "spec/features/argon2-node-keys.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the command exits (\\d+) saying \"(.*)\"$"
+      ]
     }
   ]
 }
