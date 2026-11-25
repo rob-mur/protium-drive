@@ -69,26 +69,17 @@
     {
       "id": "a-git-build-gives-protium-drive-and-its-revision-as-its-version",
       "path": "spec/features/identity.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the first line of the answer is \"([^\"]*)\" and the revision it was built from$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "the-package-installs-the-binary-as-protium-drive",
       "path": "spec/features/identity.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the package's bin folder holds the executable \"([^\"]*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "the-help-names-protium-drive",
       "path": "spec/features/identity.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the first line of the help names \"([^\"]*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-stamped-build-sends-its-release-version-to-proton",
@@ -133,10 +124,7 @@
     {
       "id": "a-serve-without-a-session-exits-asking-for-protium-drive-auth-login",
       "path": "spec/features/needs-login.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the serve exits (\\d+) saying \"(.*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-serve-on-a-refused-session-exits-as-needing-login",
@@ -146,10 +134,7 @@
     {
       "id": "a-session-refused-mid-run-stops-the-serve-asking-for-protium-drive-auth-login",
       "path": "spec/features/needs-login.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the serve exits (\\d+) saying \"(.*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "signing-in-while-the-serve-runs-is-refused",
@@ -252,10 +237,7 @@
     {
       "id": "a-mount-without-a-session-exits-asking-for-protium-drive-auth-login",
       "path": "spec/features/needs-login.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the mount exits (\\d+) saying \"(.*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-mount-on-a-refused-session-exits-as-needing-login",
@@ -350,18 +332,12 @@
     {
       "id": "the-status-without-a-session-asks-for-protium-drive-auth-login",
       "path": "spec/features/session-status.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the command exits (\\d+) saying \"(.*)\"$"
-      ]
+      "expected_status": "green"
     },
     {
       "id": "a-migration-without-a-folder-shows-the-protium-drive-usage",
       "path": "spec/features/argon2-node-keys.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the command exits (\\d+) saying \"(.*)\"$"
-      ]
+      "expected_status": "green"
     }
   ]
 }
