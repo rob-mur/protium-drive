@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   cd-pipeline:
-    uses: rob/continuous-delivery/.cd/workflows/promotion.yml@17afa1976732a85b84f2cd22ee0b4bac779fbdb9
+    uses: rob/continuous-delivery/.cd/workflows/promotion.yml@3d0f828f19e2775c0c8cae9a3c6d04ed8a6568d5
     with:
       release: ${{ inputs.release }}
       runs-on: nix-host-2cpu-4gb
