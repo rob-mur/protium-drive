@@ -9,7 +9,7 @@ export const VERSION: string = packageJson.version;
  * with `{name}` in lowercase letters and underscores. The value must name this
  * project honestly: never a Proton or rclone client name.
  */
-export const CLIENT_NAME = 'protondrivemount';
+export const CLIENT_NAME = 'protiumdrive';
 export const CHANNEL = 'alpha';
 
 const APP_VERSION_PATTERN = /^external-drive-[a-z_]+@\d+\.\d+\.\d+(-(stable|beta|alpha))?(\+[0-9A-Za-z.-]+)?$/;

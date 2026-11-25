@@ -10,8 +10,6 @@ import {
     VERSION as SDK_VERSION,
 } from '@protontech/drive-sdk';
 
-import { processDriveRequirementHeaders, SUPPORTED_REQUIREMENT_MASK_BY_SCOPE } from '../../vendor/proton-drive-cli/apiRequirements';
-import { MessageEmitter } from '../../vendor/proton-drive-cli/messageEmitter';
 import { createServerTimeAfterResponseHook } from '../../vendor/proton-drive-cli/serverTimeHook';
 import { ApiClient, initAccount, type Logger } from '../../vendor/proton-drive-sdk-account';
 import type { Auth } from '../../vendor/proton-drive-sdk-account';
@@ -26,6 +24,7 @@ import { ListingSaver } from '../drive/listing-saver';
 import { cacheUnlockedKeys, initCryptoWorker, stopCryptoWorker } from './crypto-pool';
 import { UnlockedKeyCache } from './key-cache';
 import { systemKeyring } from './keyring';
+import { createRequirementHook } from './requirement-hook';
 import { createSdkCaches } from './sdk-caches';
 
 /** Third-party clients sign in as `external-drive`; `cli-drive` is reserved for Proton's own CLI. */
@@ -174,23 +173,6 @@ class SdkHttpClient {
             retry: 0,
         });
     }
-}
-
-function createRequirementHook(sdkVersion: string, logger: Logger) {
-    const once = new MessageEmitter();
-    const warn = (message: string) =>
-        once.emitOnce(message, (msg) => {
-            logger.warn(msg);
-        });
-    return (_request: Request, _options: unknown, response: Response) => {
-        processDriveRequirementHeaders(response.headers, {
-            clientSdkVersion: sdkVersion,
-            supportedRequirementMasksByScope: SUPPORTED_REQUIREMENT_MASK_BY_SCOPE,
-            onUnsupportedFeature: (scope, mask) => warn(`Proton says this SDK lacks a required feature for ${scope} (mask ${mask}). Update proton-drive-mount.`),
-            onRequiredUpdate: (version) => warn(`Proton requires SDK ${version} or newer (this build uses ${sdkVersion}). Update proton-drive-mount.`),
-            onSuggestedUpdate: (version) => warn(`Proton suggests SDK ${version} or newer (this build uses ${sdkVersion}).`),
-        });
-    };
 }
 
 /** `protondrivemount-<uuid>`, kept in the state directory so Proton sees one stable client. */

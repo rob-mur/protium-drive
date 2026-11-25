@@ -1,4 +1,5 @@
 /** The system keyring item that holds the key the unlocked-key cache is encrypted with. */
+// Old name kept on purpose after the rename to protium-drive (#143): live installs hold state under it.
 export const KEYRING_ITEM = { service: 'proton-drive-mount', name: 'key-cache' } as const;
 
 /** How long a keyring call may take before pdm treats the keyring as out of reach. */

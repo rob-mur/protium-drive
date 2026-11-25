@@ -1,19 +1,19 @@
 {
-    "name": "proton-drive-mount",
+    "name": "protium-drive",
     "version": "0.1.0",
     "private": true,
-    "description": "Serve Proton Drive over local WebDAV through the official Proton Drive SDK, for rclone to mount.",
+    "description": "protium-drive: an unofficial third-party client, not supported by Proton. Serves Proton Drive over local WebDAV through the Proton Drive SDK, for rclone to mount.",
     "license": "MIT",
     "type": "module",
     "bin": {
-        "proton-drive-mount": "src/main.ts"
+        "protium-drive": "src/main.ts"
     },
     "scripts": {
         "start": "bun src/main.ts",
         "test": "bun test",
         "check-types": "tsc --noEmit",
         "bench": "bun bench/main.ts",
-        "build": "bun build src/main.ts src/proton/crypto-worker.ts --compile --outfile dist/proton-drive-mount"
+        "build": "bun build src/main.ts src/proton/crypto-worker.ts --compile --outfile dist/protium-drive"
     },
     "dependencies": {
         "@protontech/crypto": "2.0.0",

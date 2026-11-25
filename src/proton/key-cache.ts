@@ -186,6 +186,7 @@ async function deriveKeys(secret: Uint8Array<ArrayBuffer>): Promise<Keys> {
     const base = await crypto.subtle.importKey('raw', secret, 'HKDF', false, ['deriveKey']);
     const derive = (info: string, algorithm: HmacImportParams | AesKeyGenParams, usages: KeyUsage[]) =>
         crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: encode(info) }, base, algorithm, false, usages);
+    // Old name kept on purpose after the rename to protium-drive (#143): live installs hold state under it.
     return {
         index: await derive('proton-drive-mount key-cache index', { name: 'HMAC', hash: 'SHA-256', length: 256 }, ['sign']),
         seal: await derive('proton-drive-mount key-cache entry', { name: 'AES-GCM', length: 256 }, ['encrypt', 'decrypt']),

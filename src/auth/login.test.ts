@@ -216,7 +216,7 @@ describe('authLogin', () => {
                 await login.timeOut();
             }
 
-            await expect(login.done).rejects.toThrow('No one approved the sign-in: all 3 sign-in links timed out. Run proton-drive-mount auth login again.');
+            await expect(login.done).rejects.toThrow('No one approved the sign-in: all 3 sign-in links timed out. Run protium-drive auth login again.');
             expect(new Set(login.lines.filter(isUrl)).size).toBe(3);
             expect(await new SessionFileStore(stateDir).load()).toBeNull();
             const release = await acquireStateLock(stateDir);

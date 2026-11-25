@@ -26,20 +26,20 @@ import { appVersion, buildIdentity, buildRevision } from './version.ts';
 
 export { THIRD_PARTY_NOTICE };
 
-export const HELP = `proton-drive-mount: serve Proton Drive over local WebDAV.
+export const HELP = `protium-drive: serve Proton Drive over local WebDAV.
 ${THIRD_PARTY_NOTICE}
 
 Usage:
-  proton-drive-mount auth login [--state-dir DIR] [--fake-drive DIR]
-  proton-drive-mount auth status [--state-dir DIR]
-  proton-drive-mount auth logout [--state-dir DIR]
-  proton-drive-mount serve [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--credential-file PATH] [--root PATH]
-                     [--state-dir DIR] [--fake-drive DIR]
-  proton-drive-mount mount MOUNTPOINT [--dir-cache-time DURATION] [--vfs-cache-max-size SIZE] [--cache-dir DIR]
-                     [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--root PATH] [--state-dir DIR] [--fake-drive DIR]
-  proton-drive-mount migrate-node-keys FOLDER [--dry-run] [--state-dir DIR] [--fake-drive DIR]
-  proton-drive-mount --version
-  proton-drive-mount help
+  protium-drive auth login [--state-dir DIR] [--fake-drive DIR]
+  protium-drive auth status [--state-dir DIR]
+  protium-drive auth logout [--state-dir DIR]
+  protium-drive serve [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--credential-file PATH] [--root PATH]
+                [--state-dir DIR] [--fake-drive DIR]
+  protium-drive mount MOUNTPOINT [--dir-cache-time DURATION] [--vfs-cache-max-size SIZE] [--cache-dir DIR]
+                [--host 127.0.0.1] [--port ${DEFAULT_PORT}] [--root PATH] [--state-dir DIR] [--fake-drive DIR]
+  protium-drive migrate-node-keys FOLDER [--dry-run] [--state-dir DIR] [--fake-drive DIR]
+  protium-drive --version
+  protium-drive help
 
 Options:
   --log-level LEVEL How much to log on stderr: debug, info, warn or error. Default: info.
@@ -91,7 +91,7 @@ Environment:
 
 Exit status:
   0    Success.
-  1    An error, for example another proton-drive-mount process holds the state directory
+  1    An error, for example another protium-drive process holds the state directory
        (auth login and auth logout refuse while a serve or mount runs).
   2    Usage error.
   3    Needs login: serve or mount has no session, or Proton refused it. Run "auth login",
@@ -101,12 +101,12 @@ Exit status:
 
 /**
  * The `--version` answer, shaped like `rustc -vV`. Tools read only the first
- * line: `proton-drive-mount <version> (<short commit> <date>)` for a release
- * build, `proton-drive-mount <revision>` for any other. The lines under it
+ * line: `protium-drive <version> (<short commit> <date>)` for a release
+ * build, `protium-drive <revision>` for any other. The lines under it
  * are `key: value` details.
  */
 export function versionAnswer(env: NodeJS.ProcessEnv = process.env): string {
-    const lines = [`proton-drive-mount ${buildIdentity(env)}`, `commit-hash: ${buildRevision(env)}`];
+    const lines = [`protium-drive ${buildIdentity(env)}`, `commit-hash: ${buildRevision(env)}`];
     if (env.PDM_BUILD_DATE) {
         lines.push(`commit-date: ${env.PDM_BUILD_DATE}`);
     }
@@ -161,7 +161,7 @@ export async function authStatus(stateDir: string, output: Output = CONSOLE_OUTP
     const stored = await store.load();
     output.print(`State directory: ${stateDir}`);
     if (!stored) {
-        output.print('Not signed in. Run "proton-drive-mount auth login".');
+        output.print('Not signed in. Run "protium-drive auth login".');
         return 1;
     }
     output.print(`Session file:    ${store.filePath}`);
@@ -238,7 +238,7 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
     if (positionals[0] === 'migrate-node-keys') {
         const folder = positionals[1];
         if (positionals.length !== 2 || folder === undefined) {
-            return { code: 2, stdout: '', stderr: `Usage: proton-drive-mount migrate-node-keys FOLDER [--dry-run]\n` };
+            return { code: 2, stdout: '', stderr: `Usage: protium-drive migrate-node-keys FOLDER [--dry-run]\n` };
         }
         const code = await migrateNodeKeysCommand({
             stateDir: resolveStateDir(values['state-dir'], env),
@@ -295,7 +295,7 @@ export async function runCommand(argv: string[], env: NodeJS.ProcessEnv = proces
         return { code, stdout: '', stderr: '' };
     }
     if (positionals[0] === 'mount') {
-        const usage = 'Usage: proton-drive-mount mount MOUNTPOINT [cache options] [serve options]\n';
+        const usage = 'Usage: protium-drive mount MOUNTPOINT [cache options] [serve options]\n';
         const mountpoint = positionals[1];
         if (positionals.length !== 2 || !mountpoint) {
             return { code: 2, stdout: '', stderr: usage };

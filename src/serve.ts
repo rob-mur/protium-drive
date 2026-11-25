@@ -20,9 +20,9 @@ export const DEFAULT_PORT = 7395;
 /** The exit status of a serve that needs `auth login` first: a user service stops on it instead of restarting. */
 export const NEEDS_LOGIN = 3;
 
-export const NOT_SIGNED_IN = 'Not signed in to Proton. Run "proton-drive-mount auth login" first.';
+export const NOT_SIGNED_IN = 'Not signed in to Proton. Run "protium-drive auth login" first.';
 export const REFUSED_SESSION = (rejectedAt: string) =>
-    `Proton refused the stored session at ${rejectedAt}. Run "proton-drive-mount auth login" again.`;
+    `Proton refused the stored session at ${rejectedAt}. Run "protium-drive auth login" again.`;
 export const LOOPBACK_WARNING = (host: string) =>
     `Listening on ${host}: anyone who can reach it gets full access to your Drive. Prefer 127.0.0.1.`;
 

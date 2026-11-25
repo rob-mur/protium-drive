@@ -1,5 +1,5 @@
 {
-  description = "proton-drive-mount: serve Proton Drive over local WebDAV through the official Proton Drive SDK";
+  description = "protium-drive: an unofficial third-party client, not supported by Proton, that serves Proton Drive over local WebDAV through the Proton Drive SDK";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -16,20 +16,25 @@
     in
     {
       packages = forAllSystems (pkgs: rec {
-        proton-drive-mount = pkgs.callPackage ./nix/package.nix {
+        protium-drive = pkgs.callPackage ./nix/package.nix {
           # The revision the binary names in --version. `rev` is set for a
           # clean tree, `dirtyRev` for a dirty one.
           revision = self.rev or self.dirtyRev or "unknown";
         };
-        default = proton-drive-mount;
+        default = protium-drive;
+        # The name before the rename to protium-drive (#143), kept so that
+        # consumers that pin this output still build. Prefer `protium-drive`.
+        proton-drive-mount = protium-drive;
       });
 
       apps = forAllSystems (pkgs: rec {
-        proton-drive-mount = {
+        protium-drive = {
           type = "app";
-          program = "${self.packages.${pkgs.system}.proton-drive-mount}/bin/proton-drive-mount";
+          program = "${self.packages.${pkgs.system}.protium-drive}/bin/protium-drive";
         };
-        default = proton-drive-mount;
+        default = protium-drive;
+        # The name before the rename to protium-drive (#143).
+        proton-drive-mount = protium-drive;
       });
 
       devShells = forAllSystems (pkgs: {
@@ -39,7 +44,7 @@
             pkgs.rclone
           ];
           shellHook = ''
-            echo "proton-drive-mount dev shell: bun $(bun --version), $(rclone version | head -n1)"
+            echo "protium-drive dev shell: bun $(bun --version), $(rclone version | head -n1)"
             echo "Run: bun install && bun test"
           '';
         };

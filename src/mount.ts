@@ -264,6 +264,7 @@ function reportPending(cacheDir: string, folder: string, everyMs: number, logger
 }
 
 /** The folder, in the cache dir, where the mount notes which mount made each cache folder. */
+// Old name kept on purpose after the rename to protium-drive (#143): live installs hold state under it.
 const OWNERS = 'proton-drive-mount';
 
 /**

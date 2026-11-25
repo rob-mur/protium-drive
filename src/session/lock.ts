@@ -63,7 +63,7 @@ async function readPid(file: string): Promise<number | undefined> {
 
 function inUse(pid: number, stateDir: string): Error {
     return new Error(
-        `Another proton-drive-mount process (pid ${pid}) uses ${stateDir}. Stop it first, or use another --state-dir.`,
+        `Another protium-drive process (pid ${pid}) uses ${stateDir}. Stop it first, or use another --state-dir.`,
     );
 }
 

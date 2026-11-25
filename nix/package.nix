@@ -51,7 +51,7 @@ let
   # Fixed-output: update `outputHash` when bun.lock changes (build once with
   # lib.fakeHash and copy the hash from the error).
   nodeModules = stdenvNoCC.mkDerivation {
-    pname = "proton-drive-mount-node-modules";
+    pname = "protium-drive-node-modules";
     inherit version src;
     nativeBuildInputs = [ bun ];
     impureEnvVars = lib.fetchers.proxyImpureEnvVars;
@@ -75,18 +75,18 @@ let
   };
 in
 stdenvNoCC.mkDerivation {
-  pname = "proton-drive-mount";
+  pname = "protium-drive";
   inherit version src;
   nativeBuildInputs = [ makeWrapper ];
   dontConfigure = true;
   dontBuild = true;
   installPhase = ''
     runHook preInstall
-    app=$out/lib/proton-drive-mount
+    app=$out/lib/protium-drive
     mkdir -p $app $out/bin
     cp -R package.json tsconfig.json src fake-drive vendor $app/
     ln -s ${nodeModules}/node_modules $app/node_modules
-    makeWrapper ${lib.getExe bun} $out/bin/proton-drive-mount \
+    makeWrapper ${lib.getExe bun} $out/bin/protium-drive \
       --set PDM_RCLONE ${lib.getExe rclone} \
       --set PDM_BUILD_REVISION ${lib.escapeShellArg buildRevision} ${stampWrapperFlags} \
       --prefix LD_LIBRARY_PATH : ${
@@ -96,15 +96,18 @@ stdenvNoCC.mkDerivation {
         ]
       } \
       --add-flags "$app/src/main.ts"
+    # The binary name before the rename to protium-drive (#143), kept so that
+    # a consumer that runs bin/proton-drive-mount still works.
+    ln -s protium-drive $out/bin/proton-drive-mount
     runHook postInstall
   '';
 
   passthru = { inherit nodeModules; };
 
   meta = {
-    description = "Serve Proton Drive over local WebDAV through the official Proton Drive SDK";
+    description = "Unofficial third-party client, not supported by Proton, that serves Proton Drive over local WebDAV";
     license = lib.licenses.mit;
-    mainProgram = "proton-drive-mount";
+    mainProgram = "protium-drive";
     platforms = bun.meta.platforms;
   };
 }

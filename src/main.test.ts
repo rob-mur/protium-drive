@@ -58,7 +58,7 @@ describe('--version', () => {
 
     test('a git build gives its revision on the first line and nothing else', () => {
         const first = run(['--version'], ENV).stdout.split('\n')[0];
-        expect(first).toBe(`proton-drive-mount ${REV}`);
+        expect(first).toBe(`protium-drive ${REV}`);
     });
 
     test('a release build gives the stamped version on the first line and the full commit below it', () => {
@@ -68,25 +68,25 @@ describe('--version', () => {
             PDM_BUILD_VERSION: '1.2.0',
             PDM_BUILD_DATE: '2026-10-13',
         }).stdout.split('\n');
-        expect(lines[0]).toBe('proton-drive-mount 1.2.0 (0123abc 2026-10-13)');
+        expect(lines[0]).toBe('protium-drive 1.2.0 (0123abc 2026-10-13)');
         expect(lines).toContain(`commit-hash: ${commit}`);
         expect(lines).toContain('commit-date: 2026-10-13');
     });
 
     test('names the client Proton sees and the Drive SDK it uses, each on its own line', () => {
         const lines = run(['--version'], ENV).stdout.split('\n');
-        expect(lines).toContain('x-pm-appversion: external-drive-protondrivemount@0.1.0-alpha');
+        expect(lines).toContain('x-pm-appversion: external-drive-protiumdrive@0.1.0-alpha');
         expect(lines).toContain(`drive-sdk: js@${SDK_VERSION}`);
     });
 
     test('a release build names its stamped version in the client Proton sees', () => {
         const lines = run(['--version'], { ...ENV, PDM_BUILD_VERSION: '1.2.3', PDM_BUILD_DATE: '2026-10-13' }).stdout.split('\n');
-        expect(lines).toContain('x-pm-appversion: external-drive-protondrivemount@1.2.3-alpha');
+        expect(lines).toContain('x-pm-appversion: external-drive-protiumdrive@1.2.3-alpha');
     });
 
     test('a build with no known commit says unknown', () => {
         const lines = run(['--version'], {}).stdout.split('\n');
-        expect(lines[0]).toBe('proton-drive-mount unknown');
+        expect(lines[0]).toBe('protium-drive unknown');
         expect(lines).toContain('commit-hash: unknown');
     });
 });
@@ -101,7 +101,7 @@ describe('--help', () => {
     });
 
     test('HELP does not claim the package.json version as the build version', () => {
-        expect(HELP.split('\n')[0]).toBe('proton-drive-mount: serve Proton Drive over local WebDAV.');
+        expect(HELP.split('\n')[0]).toBe('protium-drive: serve Proton Drive over local WebDAV.');
         expect(HELP).not.toContain(VERSION);
         expect(HELP).toContain('Usage:');
     });
@@ -301,7 +301,7 @@ describe('mount dispatch', () => {
                 const answer = await runCommand(['mount', '/nonexistent-mountpoint', flag!, value!, '--fake-drive', driveDir, '--state-dir', join(driveDir, 'state')], {});
                 expect(answer.code).toBe(2);
                 expect(answer.stderr).toContain(flag!);
-                expect(answer.stderr).toContain('Usage: proton-drive-mount mount MOUNTPOINT');
+                expect(answer.stderr).toContain('Usage: protium-drive mount MOUNTPOINT');
             }
         } finally {
             await rmAsync(driveDir, { recursive: true, force: true });
@@ -319,7 +319,7 @@ describe('migrate-node-keys dispatch', () => {
         for (const argv of [['migrate-node-keys'], ['migrate-node-keys', 'a', 'b']]) {
             const answer = await runCommand(argv, {});
             expect(answer.code).toBe(2);
-            expect(answer.stderr).toContain('Usage: proton-drive-mount migrate-node-keys FOLDER [--dry-run]');
+            expect(answer.stderr).toContain('Usage: protium-drive migrate-node-keys FOLDER [--dry-run]');
         }
     });
 
@@ -359,7 +359,7 @@ describe('migrate-node-keys dispatch', () => {
         await withDrives(async (stateDir, driveDir, lines) => {
             const answer = await runCommand(['migrate-node-keys', 'Photos', '--state-dir', stateDir, '--fake-drive', driveDir], {}, capture(lines));
             expect(answer.code).toBe(1);
-            expect(lines).toEqual(['error: Not signed in to Proton. Run "proton-drive-mount auth login" first.']);
+            expect(lines).toEqual(['error: Not signed in to Proton. Run "protium-drive auth login" first.']);
         });
     });
 
@@ -476,7 +476,7 @@ describe('auth status', () => {
     function storedSession(refreshRejectedAt?: string) {
         return {
             version: 1 as const,
-            appVersion: 'external-drive-protondrivemount@0.1.0-alpha',
+            appVersion: 'external-drive-protiumdrive@0.1.0-alpha',
             savedAt: '2026-10-31T12:00:00.000Z',
             userKeyPassword: 'key-password',
             refreshRejectedAt,

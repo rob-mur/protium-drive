@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "proton-drive-mount",
+      "name": "protium-drive",
       "dependencies": {
         "@protontech/crypto": "2.0.0",
         "@protontech/drive-sdk": "0.23.0",

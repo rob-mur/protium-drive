@@ -85,7 +85,7 @@ async function signInThroughLinks(auth: Connection['auth'], print: (line: string
         } catch (error: unknown) {
             if (!(error instanceof Error && error.message === LINK_TIMED_OUT)) throw error;
             if (link === SIGN_IN_LINKS) {
-                throw new Error(`No one approved the sign-in: all ${SIGN_IN_LINKS} sign-in links timed out. Run proton-drive-mount auth login again.`);
+                throw new Error(`No one approved the sign-in: all ${SIGN_IN_LINKS} sign-in links timed out. Run protium-drive auth login again.`);
             }
         }
     }

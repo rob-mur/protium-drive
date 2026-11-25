@@ -1,14 +1,14 @@
-# proton-drive-mount
+# protium-drive
 
-Serve Proton Drive over local WebDAV through the official Proton Drive SDK, so stock
-`rclone mount` can mount it.
+An unofficial third-party client that works with Proton Drive. It serves your Proton Drive over
+local WebDAV through the official Proton Drive SDK, so stock `rclone mount` can mount it.
 
 > This is a third-party application not officially supported by Proton.
 > It is not made, endorsed or reviewed by Proton AG, and it uses no Proton
 > logos or design elements. **Proton may still limit or block an unknown
 > client** at any time, even one that follows every rule below.
 
-`proton-drive-mount --help` is the full reference for every command and flag. This README
+`protium-drive --help` is the full reference for every command and flag. This README
 shows how to use them together.
 
 ## Install
@@ -28,24 +28,29 @@ Into your Nix profile:
 
 ```sh
 nix profile add "git+ssh://forgejo@forgejo.clarob.uk/rob/proton-drive-mount?ref=refs/tags/stable"
-proton-drive-mount --version
+protium-drive --version
 ```
 
 A Nix older than the rename of `install` to `add` spells it `nix profile install`.
 
+protium-drive was called proton-drive-mount before. The package still installs
+`bin/proton-drive-mount` as a link to `bin/protium-drive`, and the flake still has the
+`proton-drive-mount` package and app. An existing install keeps its login and key cache: the
+state folder (`~/.local/state/proton-drive-mount`) and the keyring item keep the old name.
+
 Or as an input of your own flake, for NixOS or home-manager:
 
 ```nix
-inputs.proton-drive-mount.url = "git+ssh://forgejo@forgejo.clarob.uk/rob/proton-drive-mount?ref=refs/tags/stable";
+inputs.protium-drive.url = "git+ssh://forgejo@forgejo.clarob.uk/rob/proton-drive-mount?ref=refs/tags/stable";
 
 # then, in your configuration:
-home.packages = [ inputs.proton-drive-mount.packages.${pkgs.stdenv.hostPlatform.system}.default ];
+home.packages = [ inputs.protium-drive.packages.${pkgs.stdenv.hostPlatform.system}.default ];
 ```
 
 ## Sign in, once on each computer
 
 ```sh
-proton-drive-mount auth login
+protium-drive auth login
 ```
 
 Run it and follow what it prints. Keep the command running until it exits; it then has saved
@@ -63,13 +68,13 @@ there instead.
 To check the saved session:
 
 ```sh
-proton-drive-mount auth status
+protium-drive auth status
 ```
 
 ## Mount
 
 ```sh
-proton-drive-mount mount ~/ProtonDrive
+protium-drive mount ~/ProtonDrive
 ```
 
 `mount` starts the WebDAV serve and `rclone mount` with the tested settings, and mounts all of
@@ -111,19 +116,19 @@ does not end a slow upload before the serve answers.
 For example:
 
 ```sh
-proton-drive-mount mount ~/ProtonDrive --dir-cache-time 5m --vfs-cache-max-size 20G \
+protium-drive mount ~/ProtonDrive --dir-cache-time 5m --vfs-cache-max-size 20G \
   --cache-dir ~/.cache/proton-drive-mount
 ```
 
 A `--dir-cache-time` that is not a duration stops `mount` with exit 2 before it serves
 anything. To change a setting of the user service, edit its `ExecStart=` line, then run
-`systemctl --user daemon-reload` and `systemctl --user restart proton-drive-mount`.
+`systemctl --user daemon-reload` and `systemctl --user restart protium-drive`.
 
 ## Run it as a user service
 
-proton-drive-mount ships no unit file. This is an example systemd user unit; copy it to
-`~/.config/systemd/user/proton-drive-mount.service`, or write the same in your home-manager
-config (`systemd.user.services.proton-drive-mount`).
+protium-drive ships no unit file. This is an example systemd user unit; copy it to
+`~/.config/systemd/user/protium-drive.service`, or write the same in your home-manager
+config (`systemd.user.services.protium-drive`).
 
 ```ini
 [Unit]
@@ -131,9 +136,9 @@ Description=Proton Drive at ~/ProtonDrive
 
 [Service]
 Type=exec
-# With `nix profile add`. From a flake input, use the package's bin/proton-drive-mount.
-ExecStart=%h/.nix-profile/bin/proton-drive-mount mount %h/ProtonDrive --cache-dir %h/.cache/proton-drive-mount
-# Optional: only for units that must start after the folder is mounted (After=proton-drive-mount.service).
+# With `nix profile add`. From a flake input, use the package's bin/protium-drive.
+ExecStart=%h/.nix-profile/bin/protium-drive mount %h/ProtonDrive --cache-dir %h/.cache/proton-drive-mount
+# Optional: only for units that must start after the folder is mounted (After=protium-drive.service).
 #ExecStartPost=/bin/sh -c 'until mountpoint -q %h/ProtonDrive; do sleep 1; done'
 Restart=on-failure
 RestartSec=10s
@@ -152,11 +157,11 @@ Then:
 
 ```sh
 systemctl --user daemon-reload
-systemctl --user enable --now proton-drive-mount
-journalctl --user -u proton-drive-mount -f
+systemctl --user enable --now protium-drive
+journalctl --user -u protium-drive -f
 ```
 
-The unit has no `ExecStop=`. `systemctl --user stop proton-drive-mount` sends SIGTERM, which
+The unit has no `ExecStop=`. `systemctl --user stop protium-drive` sends SIGTERM, which
 unmounts the folder, and `mount` exits 0.
 
 The unit must be able to find `fusermount3` on its `PATH`. On NixOS, the user manager's `PATH`
@@ -165,11 +170,11 @@ has `/run/wrappers/bin`. If it does not on your system, add an `Environment=PATH
 ## Switch from another mount
 
 A mount from another backend, such as rclone's `protondrive` backend, keeps each write in its
-own cache until it uploads it. proton-drive-mount cannot take over that cache. If you stop the
-old mount while it still has files to upload and then start proton-drive-mount, those files do
+own cache until it uploads it. protium-drive cannot take over that cache. If you stop the
+old mount while it still has files to upload and then start protium-drive, those files do
 not reach the Drive. Empty the old mount's upload queue first.
 
-Before you start, install proton-drive-mount and run `auth login` with the same Proton account,
+Before you start, install protium-drive and run `auth login` with the same Proton account,
 as the user that will run the mount. The examples below use an old mount of the rclone remote
 `proton:` at `/mnt/proton`. Use your own names.
 
@@ -197,10 +202,10 @@ as the user that will run the mount. The examples below use an old mount of the 
    grep -rlE '"Dirty": *true' ~/.cache/rclone/vfsMeta/proton
    ```
 
-   No output means that no write waits. If it names a file, do not start proton-drive-mount:
+   No output means that no write waits. If it names a file, do not start protium-drive:
    start the old mount again and go back to step 2.
-5. Start proton-drive-mount on the same folder, for example with the user service above:
-   `proton-drive-mount mount /mnt/proton`.
+5. Start protium-drive on the same folder, for example with the user service above:
+   `protium-drive mount /mnt/proton`.
 
 When the switch works, you can remove the old cache (`~/.cache/rclone/vfs/proton` and
 `~/.cache/rclone/vfsMeta/proton`) to free its disk space.
@@ -211,7 +216,7 @@ What `mount` checks itself when it starts:
   refuses a folder where the old mount still runs and shows your files.
 - If a killed mount left the folder mounted ("Transport endpoint is not connected"), it unmounts
   the folder with `fusermount3 -u -z` and continues. The killed mount's cache stays on disk.
-- It uploads the writes an earlier proton-drive-mount mount left, when the cache folder,
+- It uploads the writes an earlier protium-drive mount left, when the cache folder,
   `--state-dir` and `--root` are the same.
 
 What you must check, because `mount` does not:
@@ -225,14 +230,14 @@ What you must check, because `mount` does not:
 ## Sign in again
 
 When Proton refuses the saved session, at the start or while it runs, `mount` and `serve` exit
-3. The service then stays stopped, and `journalctl --user -u proton-drive-mount` tells you to
+3. The service then stays stopped, and `journalctl --user -u protium-drive` tells you to
 run `auth login`.
 
 ```sh
-systemctl --user stop proton-drive-mount
-proton-drive-mount auth logout        # optional: auth login replaces the session anyway
-proton-drive-mount auth login
-systemctl --user restart proton-drive-mount
+systemctl --user stop protium-drive
+protium-drive auth logout        # optional: auth login replaces the session anyway
+protium-drive auth login
+systemctl --user restart protium-drive
 ```
 
 ## Security model
@@ -267,14 +272,14 @@ systemctl --user restart proton-drive-mount
 ## Uninstall
 
 ```sh
-systemctl --user disable --now proton-drive-mount   # unmounts ~/ProtonDrive
-journalctl --user -u proton-drive-mount -n 50       # check that no file is "not yet on the Drive"
-proton-drive-mount auth logout
-rm ~/.config/systemd/user/proton-drive-mount.service
+systemctl --user disable --now protium-drive        # unmounts ~/ProtonDrive
+journalctl --user -u protium-drive -n 50            # check that no file is "not yet on the Drive"
+protium-drive auth logout
+rm ~/.config/systemd/user/protium-drive.service
 systemctl --user daemon-reload
 rm -r ~/.local/state/proton-drive-mount             # the state folder
 rm -r ~/.cache/proton-drive-mount                   # the cache folder you gave with --cache-dir
-nix profile remove proton-drive-mount                # the name "nix profile list" shows
+nix profile remove protium-drive                    # the name "nix profile list" shows
 ```
 
 Do not remove a shared `~/.cache/rclone`: other rclone remotes can use it. Give `--cache-dir`,
@@ -288,9 +293,9 @@ let it upload first.
 | Status | Meaning |
 |--------|---------|
 | 0 | Success. |
-| 1 | An error. For example, another proton-drive-mount process holds the state directory: `auth login` and `auth logout` refuse while a `serve` or `mount` runs, and name its process id. |
+| 1 | An error. For example, another protium-drive process holds the state directory: `auth login` and `auth logout` refuse while a `serve` or `mount` runs, and name its process id. |
 | 2 | Usage error. |
-| 3 | Needs login. `serve` or `mount` found no session, or Proton refused the stored session at the start or while it ran. Run `proton-drive-mount auth login`, then start it again. |
+| 3 | Needs login. `serve` or `mount` found no session, or Proton refused the stored session at the start or while it ran. Run `protium-drive auth login`, then start it again. |
 | 130 | Interrupted. |
 
 A user service should not restart on 3: with systemd, set `RestartPreventExitStatus=3`.
@@ -303,7 +308,7 @@ From the [SDK README](https://github.com/ProtonDriveApps/sdk#usage-guidelines-fo
   vendored unchanged in `vendor/`.
 - The API host is Proton's official one, and nothing can change it.
 - Every request identifies this client honestly:
-  `x-pm-appversion: external-drive-protondrivemount@<version>-<channel>`. Never send a Proton or
+  `x-pm-appversion: external-drive-protiumdrive@<version>-<channel>`. Never send a Proton or
   rclone client name, and never change the value to get around a block.
 - Event-based sync, no recursive polling; back off on 429.
 - `--help` and `auth login` print the third-party notice above.
@@ -338,7 +343,7 @@ Run one scenario against a built package:
 ```sh
 nix build .#default
 (cd spec && bun install)
-PDM_BINARY=$PWD/result/bin/proton-drive-mount PDM_REVISION=$(git rev-parse HEAD) \
+PDM_BINARY=$PWD/result/bin/protium-drive PDM_REVISION=$(git rev-parse HEAD) \
   bun spec/node_modules/.bin/cucumber-js --config spec/cucumber.mjs --tags '@id:binary-reports-its-revision'
 ```
 
