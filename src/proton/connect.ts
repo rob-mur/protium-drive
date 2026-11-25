@@ -31,6 +31,8 @@ import { createSdkCaches } from './sdk-caches';
 export const AUTH_CLIENT_ID = 'external-drive';
 const DEFAULT_BASE_URL = 'drive-api.proton.me';
 const CLIENT_UID_FILE = 'client-uid';
+/** The SDK version this build tells Proton it runs, and compares Proton's requirements against. */
+const CLIENT_SDK_VERSION = `js@${SDK_VERSION}`;
 
 /**
  * The parts of a Proton connection that the commands need: the account module's
@@ -72,6 +74,7 @@ export async function connect(options: {
         const arm: ReceiveArm = await startReceiveArm(fakeDriveDir);
         try {
             options.onControlUrl?.(arm.controlUrl);
+            arm.onResponse(createRequirementHook(CLIENT_SDK_VERSION, logger));
             const { auth } = await arm.account.initAccount({ authClientId: AUTH_CLIENT_ID, credentials, logger });
             return {
                 auth,
@@ -87,14 +90,13 @@ export async function connect(options: {
     }
 
     initCryptoWorker();
-    const sdkVersion = `js@${SDK_VERSION}`;
     const apiClient = new ApiClient({
         baseUrl: DEFAULT_BASE_URL,
         appVersion: APP_VERSION,
         credentials,
         logger,
-        headers: { 'x-pm-drive-sdk-version': sdkVersion },
-        afterResponseHooks: [createServerTimeAfterResponseHook(), createRequirementHook(sdkVersion, logger)],
+        headers: { 'x-pm-drive-sdk-version': CLIENT_SDK_VERSION },
+        afterResponseHooks: [createServerTimeAfterResponseHook(), createRequirementHook(CLIENT_SDK_VERSION, logger)],
     });
     const { auth, srp, addresses } = await initAccount({
         authClientId: AUTH_CLIENT_ID,

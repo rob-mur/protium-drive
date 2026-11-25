@@ -4,7 +4,8 @@ import type { Logger } from '../../vendor/proton-drive-sdk-account';
 
 /**
  * Warns once per message when Proton's Drive requirement headers ask for a newer SDK or a
- * feature this build lacks. Only the client that talks to the real Proton API uses it.
+ * feature this build lacks. The client that talks to the real Proton API runs it after each
+ * response; under `--fake-drive`, the Receive arm runs it after each Drive call.
  */
 export function createRequirementHook(sdkVersion: string, logger: Logger) {
     const once = new MessageEmitter();
