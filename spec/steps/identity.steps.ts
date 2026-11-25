@@ -56,7 +56,7 @@ Then(/^the answer's x-pm-appversion names the version "([^"]*)"$/, function (thi
   const line = answer.stdout.split("\n").find((l) => l.startsWith("x-pm-appversion: "));
   assert.ok(line, `--version answered '${answer.stdout.trim()}', which has no x-pm-appversion line`);
   const value = line.slice("x-pm-appversion: ".length);
-  const shape = /^external-drive-[a-z0-9-]+@(.+)-[a-z]+$/.exec(value);
+  const shape = /^external-drive-[a-z_]+@(.+)-[a-z]+$/.exec(value);
   assert.ok(shape, `x-pm-appversion is '${value}', which is not in the SDK shape`);
   assert.equal(shape[1], version, `x-pm-appversion is '${value}', which does not name version ${version}`);
 });
