@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 import { CryptoProxy } from '@protontech/crypto';
 import type { Api } from '@protontech/crypto/proxy/endpoint/api.ts';
 import { mainThreadTransferHandlers } from '@protontech/crypto/proxy/endpoint/workerPool/transferHandlers/index.ts';
@@ -16,6 +18,18 @@ export type UnlockedKeyStore = {
 
 let lanes: { main: Lane; unlock: Lane } | undefined;
 let unlockedKeys: UnlockedKeyStore | undefined;
+/** The client request the code running now serves: whether it reads a file, and when it came. */
+type ClientRequest = { read: boolean; arrival: number };
+const clientRequest = new AsyncLocalStorage<ClientRequest>();
+let arrivals = 0;
+
+/**
+ * Runs `serve`, the work of one client request, so that its Argon2 unlocks go ahead of those of
+ * every request that came before it, and a read's skip the unlock worker (#159).
+ */
+export function servingRequest<T>({ read }: { read: boolean }, serve: () => Promise<T>): Promise<T> {
+    return clientRequest.run({ read, arrival: ++arrivals }, serve);
+}
 
 /**
  * Keeps each key the unlock worker unlocks in `store`, and takes a key from there rather than
@@ -37,6 +51,13 @@ export function cacheUnlockedKeys(store: UnlockedKeyStore | undefined): void {
  * unlocks never wait behind a walk. The unlock worker hands each unlocked key to the main worker
  * over the worker message channel and forgets it. With `cacheUnlockedKeys`, each unlocked key is
  * also kept, encrypted, in the unlocked-key cache, and a key found there skips the unlock worker.
+ *
+ * A walk can have hundreds of unlocks queued, which is minutes, so they do not go first come,
+ * first served: each lane runs the unlocks of the newest client request (`servingRequest`) first,
+ * and those of a request that came earlier, or of none, after. The listing a program's path
+ * lookup asks for thus waits for one unlock of the walk's, not all of them. A read's unlocks run
+ * on the main worker, one at a time, so they wait for no unlock of a walk's at all, and memory
+ * stays at two unlocks.
  */
 export function initCryptoWorker(): void {
     if (lanes !== undefined) {
@@ -47,9 +68,7 @@ export function initCryptoWorker(): void {
     }
     lanes = { main: startLane(), unlock: startLane() };
     const { main, unlock } = lanes;
-    // One unlock at a time, start to finish: queued in the worker instead, every export would wait
-    // behind every queued unlock, and a listing would get none of its keys until it had them all.
-    let unlocking: Promise<unknown> = Promise.resolve();
+    const unlockOn = { read: unlockQueue(main), other: unlockQueue(unlock) };
     const importPrivateKey: Api['importPrivateKey'] = async (options) => {
         if (options.passphrase === null || !(await isArgon2Locked(options))) {
             return main.api.importPrivateKey(options);
@@ -64,9 +83,8 @@ export function initCryptoWorker(): void {
                 // Unlock it again, below.
             }
         }
-        const unlocked = unlocking.then(() => unlockAndExport(unlock.api, options));
-        unlocking = unlocked.catch(() => undefined);
-        const binaryKey = await unlocked;
+        const request = clientRequest.getStore();
+        const binaryKey = await unlockOn[request?.read ? 'read' : 'other'](request?.arrival ?? 0, options);
         await store?.set(locked, binaryKey).catch(() => undefined);
         return main.api.importPrivateKey({ binaryKey, passphrase: null });
     };
@@ -81,13 +99,38 @@ function startLane(): Lane {
     return { worker, api: wrap<Api>(worker) };
 }
 
+/**
+ * Unlocks keys on `lane` one at a time, start to finish, the newest request's first and each
+ * request's in the order they came. Queued in the worker instead, every export would wait behind
+ * every queued unlock, and a listing would get none of its keys until it had them all.
+ */
+function unlockQueue(lane: Lane): (arrival: number, options: Parameters<Api['importPrivateKey']>[0]) => Promise<Uint8Array<ArrayBuffer>> {
+    const waiting: { arrival: number; start: () => void }[] = [];
+    let busy = false;
+    const next = () => {
+        const newest = waiting.reduce((best, job, index) => (job.arrival > waiting[best]!.arrival ? index : best), 0);
+        const [job] = waiting.splice(newest, 1);
+        busy = job !== undefined;
+        job?.start();
+    };
+    return async (arrival, options) => {
+        if (busy) await new Promise<void>((start) => waiting.push({ arrival, start }));
+        busy = true;
+        try {
+            return await unlockAndExport(lane.api, options);
+        } finally {
+            next();
+        }
+    };
+}
+
 /** Whether unlocking the key runs Argon2: any of its key packets is locked with Argon2 S2K. */
 async function isArgon2Locked({ armoredKey, binaryKey }: Parameters<Api['importPrivateKey']>[0]): Promise<boolean> {
     const key = binaryKey ? await readPrivateKey({ binaryKey }) : await readPrivateKey({ armoredKey: armoredKey as string });
     return key.getKeys().some(({ keyPacket }) => (keyPacket as { s2k?: { type?: string } }).s2k?.type === 'argon2');
 }
 
-/** Unlocks the key on the unlock worker and returns it unlocked, leaving no copy there. */
+/** Unlocks the key on `unlock`'s worker and returns it unlocked, leaving no copy there. */
 async function unlockAndExport(unlock: Remote<Api>, options: Parameters<Api['importPrivateKey']>[0]): Promise<Uint8Array<ArrayBuffer>> {
     const key = await unlock.importPrivateKey(options);
     try {
