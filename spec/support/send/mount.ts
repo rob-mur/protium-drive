@@ -12,9 +12,15 @@ export interface MountOutcome {
   stdout: Uint8Array;
   stderr: string;
   timedOut: boolean;
+  /** Milliseconds from the start of the action to its first byte of output; unset when it gave none. */
+  firstByteMs?: number;
+  /** Milliseconds from the start of the action to its end. */
+  ms: number;
 }
 
 const ACTION_TIMEOUT_MS = 60_000;
+/** How long a walk of a folder tree gets: each node an indexer meets for the first time costs a node-key unlock. */
+const WALK_TIMEOUT_MS = 240_000;
 
 /** Whether a file system is mounted at `mountpoint`, as `/proc/self/mountinfo` says. */
 export function isMounted(mountpoint: string): boolean {
@@ -80,6 +86,29 @@ export function listMounted(path: string): Promise<MountOutcome> {
   return run("ls", ["-A1", "--", path]);
 }
 
+/** A walk of a folder tree that is still running: `stop` ends it, and `ended` gives its outcome. */
+export interface Walk {
+  readonly ended: Promise<MountOutcome>;
+  running(): boolean;
+  stop(): void;
+}
+
+/**
+ * Starts a walk of the folder tree at `path` as a file indexer does: it lists every folder and
+ * reads the attributes of every entry, one line per entry, as `ls -lAR` writes them.
+ */
+export function startWalk(path: string): Walk {
+  const { outcome, stop } = launch("ls", ["-lAR", "--", path], undefined, WALK_TIMEOUT_MS);
+  let running = true;
+  void outcome.then(() => (running = false));
+  return { ended: outcome, running: () => running, stop };
+}
+
+/** The first `count` bytes of the file at `path`, as a program that reads the start of a file (a thumbnailer, a player) does. */
+export function readStartOfMounted(path: string, count: number): Promise<MountOutcome> {
+  return run("head", ["-c", String(count), "--", path]);
+}
+
 /** Writes `content` to the file at `path`, as a program that copies a file in does. */
 export function writeMounted(path: string, content: Uint8Array): Promise<MountOutcome> {
   return run("sh", ["-c", 'cat > "$1"', "sh", path], content);
@@ -91,17 +120,27 @@ export function unmount(mountpoint: string): Promise<MountOutcome> {
 }
 
 function run(executable: string, args: string[], stdin?: Uint8Array): Promise<MountOutcome> {
+  return launch(executable, args, stdin, ACTION_TIMEOUT_MS).outcome;
+}
+
+/** Runs `executable`, which `stop` kills; it gets `timeoutMs` before it is killed anyway. */
+function launch(executable: string, args: string[], stdin: Uint8Array | undefined, timeoutMs: number): { outcome: Promise<MountOutcome>; stop: () => void } {
   const command = [executable, ...args].join(" ");
-  return new Promise((resolve) => {
-    const child = spawn(executable, args, { stdio: [stdin ? "pipe" : "ignore", "pipe", "pipe"] });
+  const started = performance.now();
+  const child = spawn(executable, args, { stdio: [stdin ? "pipe" : "ignore", "pipe", "pipe"] });
+  const outcome = new Promise<MountOutcome>((resolve) => {
     const stdout: Buffer[] = [];
     let stderr = "";
     let timedOut = false;
+    let firstByteMs: number | undefined;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGKILL");
-    }, ACTION_TIMEOUT_MS);
-    child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
+    }, timeoutMs);
+    child.stdout?.on("data", (chunk: Buffer) => {
+      firstByteMs ??= performance.now() - started;
+      stdout.push(chunk);
+    });
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => (stderr += chunk));
     if (stdin && child.stdin) {
@@ -110,7 +149,7 @@ function run(executable: string, args: string[], stdin?: Uint8Array): Promise<Mo
     }
     const finish = (exitCode: number) => {
       clearTimeout(timer);
-      resolve({ command, exitCode, stdout: new Uint8Array(Buffer.concat(stdout)), stderr, timedOut });
+      resolve({ command, exitCode, stdout: new Uint8Array(Buffer.concat(stdout)), stderr, timedOut, firstByteMs, ms: performance.now() - started });
     };
     child.on("error", (error) => {
       stderr += `${command} could not start: ${error.message}`;
@@ -118,4 +157,5 @@ function run(executable: string, args: string[], stdin?: Uint8Array): Promise<Mo
     });
     child.on("close", (code) => finish(timedOut ? -1 : (code ?? -1)));
   });
+  return { outcome, stop: () => void child.kill("SIGKILL") };
 }

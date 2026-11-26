@@ -18,7 +18,10 @@
  * - `controlUrl` is the control channel (see control.ts), on 127.0.0.1 at a port the system
  *   allocates. The Receive arm prints it as one line that matches `CONTROL_LINE`, on stderr
  *   unless `print` says otherwise.
- * - `stop()` closes the control channel. The Drive's state is already in `DIR`.
+ * - With `realCrypto` in `DIR/drive.json`, the client does the SDK's crypto through the product's
+ *   crypto pool (real-crypto.ts).
+ * - `stop()` closes the control channel and ends any crypto workers the client started. The
+ *   Drive's state is already in `DIR`.
  *
  * On its own, for a look from the outside: `bun fake-drive/receive-arm.ts DIR` runs the control
  * channel until SIGINT or SIGTERM.
@@ -57,7 +60,17 @@ export async function startReceiveArm(dir: string, options: ReceiveArmOptions = 
     const client = new FakeDriveClient(drive, { account, clock, faults, requirements });
     const control: ControlChannel = startControlChannel(drive, client, { account, clock, faults, requirements });
     print(`fake-drive: control channel at ${control.url.href}`);
-    return { client, account, clock, onResponse: (hook) => client.onResponse(hook), controlUrl: control.url, stop: control.stop };
+    return {
+        client,
+        account,
+        clock,
+        onResponse: (hook) => client.onResponse(hook),
+        controlUrl: control.url,
+        stop: async () => {
+            await control.stop();
+            await client.stop();
+        },
+    };
 }
 
 if (import.meta.main) {

@@ -53,6 +53,8 @@ interface RevisionRecord {
 export class DriveSeed {
   private readonly folders = new Set<string>();
   private readonly files = new Map<string, SeedFile>();
+  /** The Drive unlocks node keys and decrypts downloads for real, through the product's crypto pool (fake-drive/real-crypto.ts). */
+  realCrypto = false;
 
   folder(path: string): void {
     this.folders.add(path);
@@ -132,7 +134,7 @@ export class DriveSeed {
 
     mkdirSync(join(dir, "blobs"), { recursive: true });
     for (const [blob, content] of blobs) writeFileSync(join(dir, "blobs", blob), content);
-    writeFileSync(join(dir, "drive.json"), `${JSON.stringify({ format: 1, rootUid, nextId, nextEventId: 1, nodes, events: [] }, null, 2)}\n`);
+    writeFileSync(join(dir, "drive.json"), `${JSON.stringify({ format: 1, rootUid, nextId, nextEventId: 1, nodes, events: [], ...(this.realCrypto ? { realCrypto: true } : {}) }, null, 2)}\n`);
     return uids;
   }
 }

@@ -17,6 +17,7 @@
  * The state format is the seed format. To seed a Drive before the binary starts, open it with
  * `FakeDrive.open(DIR)` and call `add`.
  */
+import type { PrivateKeyReference } from '@protontech/crypto';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -49,6 +50,7 @@ import {
 import { type Clock, FakeClock, type TimerHandle } from './clock.ts';
 import { type Fault, faultError, type FaultKind, type Faults, type Operation } from './faults.ts';
 import { armoredNodeKey, type NodeKeyKind, nodeKeyVersion } from './node-keys.ts';
+import { DECRYPTION_CONCURRENCY, mapConcurrently, RealCrypto } from './real-crypto.ts';
 import type { Requirements, ResponseHook } from './requirements.ts';
 import { StateFile } from './state-file.ts';
 
@@ -88,6 +90,12 @@ export type DriveState = {
     nextEventId: number;
     nodes: Record<string, NodeRecord>;
     events: DriveEvent[];
+    /**
+     * True: the SDK surface does the SDK's crypto for real (real-crypto.ts). Loading a file's node
+     * unlocks its node key, and a download decrypts the file's content, through the product's
+     * crypto pool. Absent: it does no crypto.
+     */
+    realCrypto?: boolean;
 };
 
 export type NodeRecord = {
@@ -198,6 +206,12 @@ export class FakeDrive {
     get rootUid(): string {
         this.sync();
         return this.state.rootUid;
+    }
+
+    /** Whether the SDK surface does the SDK's crypto for real (`DriveState.realCrypto`). */
+    get realCrypto(): boolean {
+        this.sync();
+        return this.state.realCrypto === true;
     }
 
     // --- reads, for the control channel ------------------------------------
@@ -543,6 +557,7 @@ export class FakeDriveClient implements SdkSurface {
     /** The calls that wait under an `upload-queued` fault, each by the function that gives it its turn. */
     private readonly waitingForTurn = new Set<() => void>();
     private readonly responseHooks: ResponseHook[] = [];
+    private readonly crypto = new RealCrypto();
 
     constructor(
         private readonly drive: FakeDrive,
@@ -551,6 +566,11 @@ export class FakeDriveClient implements SdkSurface {
 
     calls(): CallCounts {
         return structuredClone(this.counts);
+    }
+
+    /** Ends the crypto workers the Drive's real crypto started, if it started any. */
+    stop(): Promise<void> {
+        return this.crypto.stop();
     }
 
     /**
@@ -591,14 +611,23 @@ export class FakeDriveClient implements SdkSurface {
     async *iterateNodes(uids: NodeOrUid[]): AsyncGenerator<MaybeMissingNode> {
         this.count('iterateNodes', 'nodeLoads', ...uids.map(uidOf));
         await this.enter('iterateNodes', ...uids.map((uid) => this.drive.pathOfUid(uidOf(uid))));
-        for (const uid of uids.map(uidOf)) {
-            yield this.drive.record(uid) ? this.entity(uid) : { missingUid: uid };
+        if (!this.drive.realCrypto) {
+            for (const uid of uids.map(uidOf)) {
+                yield this.drive.record(uid) ? this.entity(uid) : { missingUid: uid };
+            }
+            return;
         }
+        yield* mapConcurrently(uids.map(uidOf), DECRYPTION_CONCURRENCY, async (uid): Promise<MaybeMissingNode> => {
+            if (!this.drive.record(uid)) return { missingUid: uid };
+            await this.unlockNodeKey(uid);
+            return this.entity(uid);
+        });
     }
 
     async getNode(uid: NodeOrUid): Promise<NodeEntity> {
         this.count('getNode', 'nodeLoads', uidOf(uid));
         await this.enter('getNode', this.drive.pathOfUid(uidOf(uid)));
+        if (this.drive.realCrypto) await this.unlockNodeKey(uidOf(uid));
         return this.entity(uidOf(uid));
     }
 
@@ -633,7 +662,11 @@ export class FakeDriveClient implements SdkSurface {
         const node = this.requireRecord(uidOf(uid));
         const revision = node.revisions.at(-1);
         if (!revision) throw new ValidationError(`fake-drive: ${node.name} is not a file`);
-        const content = this.drive.revisionContent(revision);
+        const stored = this.drive.revisionContent(revision);
+        // With real crypto, the content comes once the file's node key has decrypted it.
+        const content = this.drive.realCrypto ? this.crypto.download((await this.unlockNodeKey(node.uid))!, stored) : stored;
+        // A downloader that is never read must not leave a failed decryption unhandled.
+        if (content instanceof Promise) content.catch(() => {});
         const claimedSize = node.clearTextSize === false ? undefined : revision.size;
         // An integrity fault fails the download before its first byte.
         const failure = fault?.kind === 'integrity' ? faultError('integrity') : undefined;
@@ -778,6 +811,12 @@ export class FakeDriveClient implements SdkSurface {
         const node = this.drive.record(uid);
         if (!node) throw new NoSuchNodeError(`fake-drive: no node ${uid}`);
         return node;
+    }
+
+    /** The unlocked node key of the file `uid` (real-crypto.ts). A folder has none here. */
+    private async unlockNodeKey(uid: string): Promise<PrivateKeyReference | undefined> {
+        const node = this.requireRecord(uid);
+        return node.type === 'file' ? this.crypto.nodeKey(uid, armoredNodeKey(node.nodeKey)) : undefined;
     }
 
     /**
@@ -993,8 +1032,9 @@ function untilAborted(signal: AbortSignal | undefined): Promise<void> {
     });
 }
 
-/** Writes `content` in chunks. Like the SDK, it releases the writer's lock but never closes the stream. */
-async function writeAll(content: Uint8Array, writable: WritableStream, signal?: AbortSignal): Promise<void> {
+/** Writes `content`, once it has come, in chunks. Like the SDK, it releases the writer's lock but never closes the stream. */
+async function writeAll(pending: Uint8Array | Promise<Uint8Array>, writable: WritableStream, signal?: AbortSignal): Promise<void> {
+    const content = await pending;
     const writer = writable.getWriter();
     for (let offset = 0; offset < content.length; offset += DOWNLOAD_CHUNK) {
         if (signal?.aborted) throw new AbortError('fake-drive: download aborted');
@@ -1003,11 +1043,12 @@ async function writeAll(content: Uint8Array, writable: WritableStream, signal?: 
     writer.releaseLock();
 }
 
-/** The SDK's seekable stream over `content`: `seek` to a byte, then `read` up to a count of bytes. */
-function seekable(content: Uint8Array): SeekableReadableStream {
+/** The SDK's seekable stream over `content`, once it has come: `seek` to a byte, then `read` up to a count of bytes. */
+function seekable(pending: Uint8Array | Promise<Uint8Array>): SeekableReadableStream {
     let position = 0;
     const read = async (count: number) => {
         if (count <= 0) throw new Error('Invalid number of bytes to read');
+        const content = await pending;
         const value = content.slice(position, position + count);
         position += value.length;
         return { value, done: position >= content.length };
