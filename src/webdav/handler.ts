@@ -14,6 +14,7 @@ import type { Logger } from '../../vendor/proton-drive-sdk-account';
 import type { ByteRange } from '../drive/download';
 import { DriveError } from '../drive/errors';
 import type { DriveTree } from '../drive/tree';
+import { servingRequest } from '../proton/crypto-pool';
 import { FailedPutGuard } from './guard';
 import { parsePath } from './paths';
 import { etagFor, multistatus } from './xml';
@@ -57,7 +58,9 @@ export function createWebDavHandler(options: HandlerOptions): WebDavHandler {
                 if (problem) {
                     response = text(401, problem);
                 } else {
-                    response = await route(request, parsePath(url.pathname));
+                    // Its node-key unlocks go ahead of those of the requests before it, as a walk's (#159).
+                    const read = request.method === 'GET' || request.method === 'HEAD';
+                    response = await servingRequest({ read }, () => route(request, parsePath(url.pathname)));
                 }
             }
         } catch (error: unknown) {

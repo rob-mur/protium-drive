@@ -7,7 +7,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { cacheUnlockedKeys, initCryptoWorker, stopCryptoWorker } from './crypto-pool';
+import { cacheUnlockedKeys, initCryptoWorker, servingRequest, stopCryptoWorker } from './crypto-pool';
 import { UnlockedKeyCache } from './key-cache';
 import type { Keyring } from './keyring';
 
@@ -25,20 +25,26 @@ async function lockedNodeKey(kind: 'argon2' | 'iterated'): Promise<string> {
 
 let argon2Key: string;
 let iteratedKey: string;
+/** A second Argon2-locked key: the key of a file a read opens, which no walk has unlocked. */
+let readKey: string;
 
 beforeAll(async () => {
-    [argon2Key, iteratedKey] = await Promise.all([lockedNodeKey('argon2'), lockedNodeKey('iterated')]);
+    [argon2Key, iteratedKey, readKey] = await Promise.all([lockedNodeKey('argon2'), lockedNodeKey('iterated'), lockedNodeKey('argon2')]);
     initCryptoWorker();
 }, 30_000);
 
 afterAll(stopCryptoWorker);
 
-/** Starts `count` Argon2 unlocks, as a walk does, and records when each one finishes. */
-function startWalkUnlocks(count: number) {
+/**
+ * Starts `count` Argon2 unlocks, as a walk does, and records when each one finishes. With
+ * `listing`, they come from one listing a client asked for, as a WebDAV walk's do.
+ */
+function startWalkUnlocks(count: number, listing?: 'listing') {
     const state = { finished: 0, finishedAtMs: [] as number[] };
+    const unlock = () => CryptoProxy.importPrivateKey({ armoredKey: argon2Key, passphrase: 'pw' });
     const done = Promise.all(
         Array.from({ length: count }, async () => {
-            await CryptoProxy.importPrivateKey({ armoredKey: argon2Key, passphrase: 'pw' });
+            await (listing ? servingRequest({ read: false }, unlock) : unlock());
             state.finished++;
             state.finishedAtMs.push(performance.now());
         }),
@@ -100,6 +106,42 @@ test('a key Proton clients lock with iterated S2K unlocks while a walk’s Argon
 
     expect(key.getVersion()).toBe(4);
     expect(unlocksFinishedFirst).toBeLessThan(2);
+}, 60_000);
+
+test('a read unlocks its Argon2-locked key within 1 s while a walk has 30 Argon2 unlocks queued (#159)', async () => {
+    const walk = startWalkUnlocks(30, 'listing');
+    await Bun.sleep(100);
+
+    const started = performance.now();
+    const key = await servingRequest({ read: true }, () => CryptoProxy.importPrivateKey({ armoredKey: readKey, passphrase: 'pw' }));
+    const tookMs = performance.now() - started;
+    const unlocksFinishedFirst = walk.state.finished;
+    await walk.done;
+
+    expect(key.getVersion()).toBe(6);
+    // Behind the walk's 30 unlocks of about 0.4 s each, the read would wait about 12 s.
+    expect(tookMs).toBeLessThan(1000);
+    expect(unlocksFinishedFirst).toBeLessThan(5);
+}, 120_000);
+
+test('a listing a path lookup asks for during a walk waits for one of the walk’s 30 queued Argon2 unlocks, not all of them (#159)', async () => {
+    const walk = startWalkUnlocks(30, 'listing');
+    await Bun.sleep(100);
+
+    await servingRequest({ read: false }, () => CryptoProxy.importPrivateKey({ armoredKey: readKey, passphrase: 'pw' }));
+    const unlocksFinishedFirst = walk.state.finished;
+    await walk.done;
+
+    expect(unlocksFinishedFirst).toBeLessThan(3);
+}, 120_000);
+
+test('a request gets back what it returns, and its failed unlock, and later unlocks still run', async () => {
+    expect(await servingRequest({ read: true }, async () => 'block')).toBe('block');
+    await expect(servingRequest({ read: true }, () => CryptoProxy.importPrivateKey({ armoredKey: readKey, passphrase: 'wrong' }))).rejects.toThrow();
+    await expect(servingRequest({ read: false }, () => CryptoProxy.importPrivateKey({ armoredKey: readKey, passphrase: 'wrong' }))).rejects.toThrow();
+
+    const key = await servingRequest({ read: true }, () => CryptoProxy.importPrivateKey({ armoredKey: readKey, passphrase: 'pw' }));
+    expect(key.getVersion()).toBe(6);
 }, 60_000);
 
 describe('with an unlocked-key cache', () => {
