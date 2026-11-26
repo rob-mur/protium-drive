@@ -24,7 +24,8 @@ export type DownloadOptions = {
  * Opens a download as a byte stream, without buffering the whole file.
  *
  * Three SDK details shape this function:
- * - Each downloader holds one of the SDK's few download slots. A seekable
+ * - Each downloader holds one of the SDK's few download slots, from before the
+ *   SDK loads the node's keys, so the node is loaded first. A seekable
  *   stream frees it when its signal aborts; `downloadToStream` frees it only
  *   when the download ends, so a writer that waits for a reader must be
  *   released when the reader goes away. Every path here aborts the signal and
@@ -51,6 +52,10 @@ export async function openDownload(sdk: DriveSdk, file: Entry, options: Download
 
     let downloader: FileDownloader;
     try {
+        // The SDK takes a download slot before it loads the node's keys, so load them first: a
+        // read that waits for an unlock then holds no slot that a read with its keys could use
+        // (#163). A failure here is left to `getFileDownloader`, which reports it as before.
+        await untilAborted(sdk.getNode(file.uid).catch(() => undefined), abort.signal);
         downloader = await sdk.getFileDownloader(file.uid, abort.signal);
     } catch (error: unknown) {
         abort.abort();
