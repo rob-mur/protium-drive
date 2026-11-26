@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { AbortError, type FileDownloader } from '@protontech/drive-sdk';
 
 import type { Entry } from './entry.ts';
-import { openDownload, primeStream, sliceStream } from './download.ts';
+import { openDownload, primeStream, READ_AHEAD_CHUNK, READ_AHEAD_DEPTH, sliceStream } from './download.ts';
 import type { DriveSdk } from './sdk.ts';
 
 const QUIET = { debug() {}, info() {}, warn() {}, error() {} };
@@ -35,6 +35,9 @@ function bytes(n: number): Uint8Array<ArrayBuffer> {
 function fakeDownloader(content: Uint8Array, observed: { aborted?: boolean } = {}): FileDownloader & { setSignal(signal: AbortSignal): void } {
     // The signal comes from `getFileDownloader`, so the fake learns it there.
     const abort = new AbortController();
+    abort.signal.addEventListener('abort', () => {
+        observed.aborted = true;
+    });
     return {
         getClaimedSizeInBytes: () => content.length,
         downloadToStream(writable: WritableStream<Uint8Array>) {
@@ -58,9 +61,6 @@ function fakeDownloader(content: Uint8Array, observed: { aborted?: boolean } = {
                 signal.removeEventListener('abort', abortWrite);
                 await writer.close();
             })();
-            signal.addEventListener('abort', () => {
-                observed.aborted = true;
-            });
             return {
                 pause() {},
                 resume() {},
@@ -109,6 +109,47 @@ function sdkWith(downloader: FileDownloader & { setSignal?(signal: AbortSignal):
             return downloader;
         },
     } as unknown as DriveSdk;
+}
+
+/**
+ * Wraps the seekable streams of `downloader` so that each `read` waits until the test releases
+ * it. Records where each read starts and how many bytes it asks for, in the order they start.
+ */
+function gatedReads(downloader: FileDownloader) {
+    const reads: { position: number; count: number; release: () => void }[] = [];
+    let openGate = false;
+    const original = downloader.getSeekableStream.bind(downloader);
+    downloader.getSeekableStream = () => {
+        const seekable = original();
+        let position = 0;
+        const seek = seekable.seek.bind(seekable);
+        seekable.seek = (to: number) => {
+            position = to;
+            return seek(to);
+        };
+        const read = seekable.read.bind(seekable);
+        seekable.read = async (count: number) => {
+            const gate = Promise.withResolvers<void>();
+            reads.push({ position, count, release: gate.resolve });
+            if (openGate) gate.resolve();
+            await gate.promise;
+            const result = await read(count);
+            position += result.value.length;
+            return result;
+        };
+        return seekable;
+    };
+    return {
+        downloader,
+        started: () => reads.map((read) => read.position),
+        requested: () => reads.map((read) => read.count),
+        release: (index: number) => reads[index]!.release(),
+        releaseAll() {
+            openGate = true;
+            for (const read of reads) read.release();
+        },
+        settle: () => new Promise((resolve) => setTimeout(resolve, 10)),
+    };
 }
 
 async function readAll(stream: ReadableStream<Uint8Array>): Promise<Uint8Array<ArrayBuffer>> {
@@ -251,6 +292,100 @@ describe('openDownload', () => {
         void body;
         abort.abort();
         await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(observed.aborted).toBeTrue();
+    });
+
+    test('a long range comes whole and in order, across read-ahead chunks', async () => {
+        const content = bytes(3 * READ_AHEAD_CHUNK + 5000);
+        const stream = await openDownload(sdkWith(fakeDownloader(content)), fileEntry(content.length), {
+            range: { start: 1000, end: content.length - 2000 },
+            logger: QUIET,
+        });
+        expect(await readAll(stream)).toEqual(content.subarray(1000, content.length - 1999));
+    });
+
+    test('a range read fetches the next chunks while the reader holds the current one, up to the read-ahead depth', async () => {
+        const content = bytes((READ_AHEAD_DEPTH + 3) * READ_AHEAD_CHUNK);
+        const gated = gatedReads(fakeDownloader(content));
+        const opening = openDownload(sdkWith(gated.downloader), fileEntry(content.length), {
+            range: { start: 10, end: content.length - 1 },
+            logger: QUIET,
+        });
+        await gated.settle();
+        // Before the first byte, every lane is already fetching.
+        expect(gated.started()).toEqual([10, READ_AHEAD_CHUNK, 2 * READ_AHEAD_CHUNK, 3 * READ_AHEAD_CHUNK].slice(0, READ_AHEAD_DEPTH));
+        gated.releaseAll();
+        const stream = await opening;
+        await gated.settle();
+        // The reader holds the first chunk and has not asked for more: no fetch past the depth.
+        expect(gated.started()).toHaveLength(READ_AHEAD_DEPTH);
+        const reader = stream.getReader();
+        await reader.read(); // the first chunk, read before the stream was handed over
+        await reader.read();
+        await gated.settle();
+        // Taking the next chunk frees one place, so one more fetch starts.
+        expect(gated.started()).toHaveLength(READ_AHEAD_DEPTH + 1);
+        await reader.cancel();
+    });
+
+    test('a range read fetches nothing past the end of its range', async () => {
+        const content = bytes(4 * READ_AHEAD_CHUNK);
+        const gated = gatedReads(fakeDownloader(content));
+        gated.releaseAll();
+        const stream = await openDownload(sdkWith(gated.downloader), fileEntry(content.length), {
+            range: { start: 0, end: READ_AHEAD_CHUNK + 99 },
+            logger: QUIET,
+        });
+        expect((await readAll(stream)).length).toBe(READ_AHEAD_CHUNK + 100);
+        expect(gated.started()).toEqual([0, READ_AHEAD_CHUNK]);
+        expect(gated.requested()).toEqual([READ_AHEAD_CHUNK, 100]);
+    });
+
+    test('a reader that goes away aborts the fetches still out, and no more start', async () => {
+        const observed: { aborted?: boolean } = {};
+        const content = bytes((READ_AHEAD_DEPTH + 3) * READ_AHEAD_CHUNK);
+        const gated = gatedReads(fakeDownloader(content, observed));
+        const opening = openDownload(sdkWith(gated.downloader), fileEntry(content.length), {
+            range: { start: 1, end: content.length - 1 }, // not the whole file, which skips the seekable stream
+            logger: QUIET,
+        });
+        await gated.settle();
+        gated.release(0);
+        const stream = await opening;
+        await stream.cancel();
+        expect(observed.aborted).toBeTrue();
+        gated.releaseAll();
+        await gated.settle();
+        expect(gated.started()).toHaveLength(READ_AHEAD_DEPTH);
+    });
+
+    test('a read-ahead fetch that fails errors the body once the reader reaches it, and aborts the rest', async () => {
+        const observed: { aborted?: boolean } = {};
+        const content = bytes(3 * READ_AHEAD_CHUNK);
+        const downloader = fakeDownloader(content, observed);
+        const original = downloader.getSeekableStream.bind(downloader);
+        downloader.getSeekableStream = () => {
+            const seekable = original();
+            let position = 0;
+            const seek = seekable.seek.bind(seekable);
+            seekable.seek = (to: number) => {
+                position = to;
+                return seek(to);
+            };
+            const read = seekable.read.bind(seekable);
+            seekable.read = (count: number) => (position === READ_AHEAD_CHUNK ? Promise.reject(new Error('block 2 failed')) : read(count));
+            return seekable;
+        };
+        const errors: unknown[] = [];
+        const stream = await openDownload(sdkWith(downloader), fileEntry(content.length), {
+            range: { start: 1, end: content.length - 1 }, // not the whole file, which skips the seekable stream
+            logger: QUIET,
+            onError: (error) => errors.push(error),
+        });
+        const reader = stream.getReader();
+        await reader.read();
+        await expect(reader.read()).rejects.toThrow('block 2 failed');
+        expect(errors).toHaveLength(1);
         expect(observed.aborted).toBeTrue();
     });
 
