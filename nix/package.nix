@@ -106,7 +106,7 @@ stdenvNoCC.mkDerivation {
 
   meta = {
     description = "Unofficial third-party client, not supported by Proton, that serves Proton Drive over local WebDAV";
-    license = lib.licenses.mit;
+    license = lib.licenses.agpl3Only;
     mainProgram = "protium-drive";
     platforms = bun.meta.platforms;
   };

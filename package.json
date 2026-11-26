@@ -3,7 +3,7 @@
     "version": "0.1.0",
     "private": true,
     "description": "protium-drive: an unofficial third-party client, not supported by Proton. Serves Proton Drive over local WebDAV through the Proton Drive SDK, for rclone to mount.",
-    "license": "MIT",
+    "license": "AGPL-3.0-only",
     "type": "module",
     "bin": {
         "protium-drive": "src/main.ts"

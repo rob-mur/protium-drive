@@ -349,4 +349,4 @@ PDM_BINARY=$PWD/result/bin/protium-drive PDM_REVISION=$(git rev-parse HEAD) \
 
 ## License
 
-MIT; see `LICENSE`. `vendor/` holds MIT code © Proton AG, with its license files.
+protium-drive is licensed under AGPL-3.0-only; see `LICENSE`. `vendor/` keeps its MIT code © Proton AG, with its license files.
