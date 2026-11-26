@@ -10,7 +10,7 @@
  *
  * Both were made with openpgp.js 6.3.1 and locked with the passphrase `fixture-passphrase`;
  * `node-keys.test.ts` reads them back to hold them to this description. Every file of a kind
- * shares its key: nothing here unlocks one.
+ * shares its key. Only a Drive with real crypto (real-crypto.ts) unlocks one, once per file.
  */
 
 /** The node key a file holds. A file with none given holds a `v4` key. */
