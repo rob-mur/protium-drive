@@ -367,10 +367,7 @@
     {
       "id": "a-range-from-the-middle-of-a-file-gives-exactly-those-bytes",
       "path": "spec/features/range-read.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the serve answered the read as partial content, and the read gives the file's bytes from (\\d+) to (\\d+) within ([\\d.]+) seconds$"
-      ]
+      "expected_status": "green"
     }
   ]
 }
