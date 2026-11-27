@@ -77,6 +77,7 @@ export async function benchStream(options: StreamOptions): Promise<StreamRow[]> 
         const uid = drive.add('video.mkv', { type: 'file', content: new Uint8Array(size).fill(7), mediaType: 'video/x-matroska' });
         const client = new FakeDriveClient(drive);
         const sdk = {
+            getNode: async (node: string) => client.getNode(node),
             getFileDownloader: async (node: string, signal?: AbortSignal) =>
                 withBlockLatency(await client.getFileDownloader(node, signal), options.blockMs, size),
         } as unknown as DriveSdk;
