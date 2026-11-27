@@ -15,3 +15,15 @@ Feature: Reading a file while an indexer walks the mount
     When the user lists the mounted folder "Photos"
     And an indexer walks the mounted folder "Archive", and once the Drive has been asked for 30 of the walked nodes the user reads the first 64 KiB of the mounted file "Photos/beach.jpg"
     Then the read gives the file's first 64 KiB, its first byte comes within 5 seconds, and the walk was still running when it ended
+
+  @id:a-read-of-an-unlisted-file-during-a-walk-of-argon2-locked-files-starts-within-seconds
+  Scenario: A read of a file whose node key was never unlocked, while an indexer walks 160 Argon2-locked files, gives its first byte within 5 seconds
+    The user never lists "Photos", so the serve has not unlocked the node key of "beach.jpg" when the
+    read starts. That unlock must not wait behind the walk's unlocks either.
+
+    Given a Drive whose My files holds the folders "Archive/2021" to "Archive/2024" of 40 files each, every file with an Argon2-locked node key
+    And the Drive's My files holds the 4 MiB file "Photos/beach.jpg" with an Argon2-locked node key
+    And the Drive unlocks node keys and decrypts downloads for real
+    And the user mounts the Drive at a folder
+    When an indexer walks the mounted folder "Archive", and once the Drive has been asked for 30 of the walked nodes the user reads the first 64 KiB of the mounted file "Photos/beach.jpg"
+    Then the read gives the file's first 64 KiB, its first byte comes within 5 seconds, and the walk was still running when it ended
