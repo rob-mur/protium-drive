@@ -5,6 +5,7 @@ import { stopCryptoWorker } from '../src/proton/crypto-pool';
 import { benchCrypto, type CryptoRow } from './crypto';
 import { benchListing, type ListingRow } from './listing';
 import { fixed, table } from './stats';
+import { benchStream, type StreamRow } from './stream';
 import { benchTree, type TreeRow } from './tree';
 
 export type BenchOptions = {
@@ -18,6 +19,10 @@ export type BenchOptions = {
     treeFiles: number;
     treeYears: number;
     treeConcurrency: number;
+    /** Size of the file the stream bench reads; 0 skips the stream bench. */
+    streamMib: number;
+    /** What one block fetch costs in the stream bench. */
+    blockMs: number;
     skip: Set<'crypto' | 'listing'>;
 };
 
@@ -31,6 +36,9 @@ export const DEFAULTS: BenchOptions = {
     treeFiles: 0,
     treeYears: 10,
     treeConcurrency: 8,
+    streamMib: 0,
+    // As the live Drive: about 50 ms for the block token and 500 ms for the 4 MiB block.
+    blockMs: 550,
     skip: new Set(),
 };
 
@@ -38,7 +46,8 @@ const numbers = (value: string) => value.split(',').map(Number);
 
 /**
  * Reads `--sizes 30,300 --argon2 0,1 --rtt 100 --uid-page 150 --distinct 16 --skip crypto|listing`,
- * and `--tree-files 20400 --tree-years 10 --tree-concurrency 8` for the immich-shaped tree.
+ * `--tree-files 20400 --tree-years 10 --tree-concurrency 8` for the immich-shaped tree,
+ * and `--stream-mib 64 --block-ms 550` for range reads of one file.
  */
 export function parseArgs(argv: string[]): BenchOptions {
     const options: BenchOptions = { ...DEFAULTS, skip: new Set() };
@@ -71,6 +80,12 @@ export function parseArgs(argv: string[]): BenchOptions {
                 break;
             case '--tree-concurrency':
                 options.treeConcurrency = Number(value);
+                break;
+            case '--stream-mib':
+                options.streamMib = Number(value);
+                break;
+            case '--block-ms':
+                options.blockMs = Number(value);
                 break;
             case '--skip':
                 options.skip.add(value as 'crypto' | 'listing');
@@ -148,6 +163,19 @@ export function treeReport(rows: TreeRow[]): string {
     );
 }
 
+export function streamReport(rows: StreamRow[]): string {
+    return table(
+        ['read', 'MiB', 'first byte ms', 'total s', 'MiB/s'],
+        rows.map((r) => [
+            r.read,
+            (r.bytes / 2 ** 20).toFixed(1),
+            fixed(r.firstByteMs),
+            (r.totalMs / 1000).toFixed(2),
+            (r.bytes / 2 ** 20 / (r.totalMs / 1000)).toFixed(1),
+        ]),
+    );
+}
+
 /** Runs the benchmark and returns its Markdown report. It measures and never judges: no time fails it. */
 export async function runBench(options: BenchOptions, log: (text: string) => void = () => {}): Promise<string> {
     const parts = [`## Machine\n\n\`\`\`\n${machine()}\n\`\`\``];
@@ -168,6 +196,13 @@ export async function runBench(options: BenchOptions, log: (text: string) => voi
             const rows = await benchTree({ roundTripMs, uidPage, distinctKeys, files, years, concurrency });
             parts.push(
                 `## Tree: an immich library of ${files} photos in ${years} years of month folders, walked ${concurrency} folders at a time; simulated round trip ${roundTripMs} ms, v4 node keys\n\n${treeReport(rows)}`,
+            );
+        }
+        if (options.streamMib > 0) {
+            log('stream...');
+            const { streamMib: mib, blockMs } = options;
+            parts.push(
+                `## Stream: range reads of a ${mib} MiB file of the fake Drive, ${blockMs} ms per 4 MiB block fetch\n\n${streamReport(await benchStream({ mib, blockMs }))}`,
             );
         }
     } finally {

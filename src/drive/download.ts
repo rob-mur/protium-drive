@@ -8,7 +8,13 @@ export type ByteRange = { start: number; end: number };
 
 type ReadResult = Awaited<ReturnType<ReadableStreamDefaultReader<Uint8Array>['read']>>;
 
-const RANGE_READ_BYTES = 1024 * 1024;
+/** Bytes one range fetch asks for: Proton's block size, so that one fetch is one block. */
+export const READ_AHEAD_CHUNK = 4 * 1024 * 1024;
+/**
+ * Range fetches out at once, the one the reader waits for included. A range read holds at most
+ * this many chunks, so it buffers no more than `READ_AHEAD_DEPTH * READ_AHEAD_CHUNK` bytes.
+ */
+export const READ_AHEAD_DEPTH = 4;
 /** Chunks the bridge holds before it makes the SDK wait. */
 const BRIDGE_HIGH_WATER_MARK = 4;
 
@@ -171,27 +177,59 @@ function streamWholeFile(
     return readable;
 }
 
-/** Streams `range` with the SDK's seekable stream. Throws if the revision cannot seek. */
+type Seekable = ReturnType<FileDownloader['getSeekableStream']>;
+type Chunk = { value: Uint8Array; short: boolean };
+
+/**
+ * Streams `range` with the SDK's seekable streams. Throws if the revision cannot seek.
+ *
+ * One seekable stream fetches one block at a time, so the range is cut into block-sized chunks
+ * that `READ_AHEAD_DEPTH` seekable streams of the one downloader fetch at once. Chunk `n` goes to
+ * stream `n % READ_AHEAD_DEPTH`, which by then has handed over chunk `n - READ_AHEAD_DEPTH`. A
+ * new chunk starts only when the reader takes one, so a slow reader holds the fetches back, and
+ * none starts past the end of the range. When the reader goes away or the range ends, the abort
+ * stops the fetches still out.
+ */
 async function streamRange(
     downloader: FileDownloader,
     range: ByteRange,
     abort: AbortController,
     onError: (error: unknown) => void,
 ): Promise<ReadableStream<Uint8Array>> {
-    const seekable = downloader.getSeekableStream();
-    await seekable.seek(range.start);
-    let remaining = range.end - range.start + 1;
+    const lanes: Seekable[] = [downloader.getSeekableStream()];
+    let next = range.start;
+    let started = 0;
+    const inFlight: Promise<Chunk>[] = [];
+
+    const fetchNext = () => {
+        const start = next;
+        const end = Math.min(range.end, (Math.floor(start / READ_AHEAD_CHUNK) + 1) * READ_AHEAD_CHUNK - 1);
+        next = end + 1;
+        const lane = started++ % READ_AHEAD_DEPTH;
+        const chunk = (async () => {
+            const seekable = (lanes[lane] ??= downloader.getSeekableStream());
+            await seekable.seek(start);
+            // The SDK's read gives every byte asked for unless the file ends first.
+            const { value } = await seekable.read(end - start + 1);
+            return { value, short: value.length < end - start + 1 };
+        })();
+        // A fetch the reader never reaches must not fail as an unhandled rejection.
+        chunk.catch(() => {});
+        inFlight.push(chunk);
+    };
 
     return new ReadableStream<Uint8Array>(
         {
             async pull(controller) {
                 try {
-                    const { value, done } = await seekable.read(Math.min(remaining, RANGE_READ_BYTES));
+                    while (inFlight.length < READ_AHEAD_DEPTH && next <= range.end && !abort.signal.aborted) {
+                        fetchNext();
+                    }
+                    const { value, short } = await inFlight.shift()!;
                     if (value.length > 0) {
                         controller.enqueue(value);
-                        remaining -= value.length;
                     }
-                    if (remaining <= 0 || done || value.length === 0) {
+                    if (short || (inFlight.length === 0 && next > range.end)) {
                         controller.close();
                         abort.abort();
                     }

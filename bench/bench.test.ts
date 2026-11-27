@@ -45,3 +45,10 @@ test('the tree bench lists a nested tree cold, saves it, and lists it warm from 
     expect(report).toMatch(/\| 30 \| 29 \|/);
     expect(report).toMatch(/\| warm \|[^\n]*\| 0 \| 0 \|/);
 }, 120_000);
+
+test('the stream bench reads a file of the fake Drive from the start and from a seek', async () => {
+    const report = await runBench(parseArgs(['--skip', 'crypto', '--skip', 'listing', '--stream-mib', '9', '--block-ms', '1']));
+    expect(report).toContain('## Stream');
+    expect(report).toMatch(/\| from byte 1 to the end \| 9\.0 \|/);
+    expect(report).toMatch(/\| seek to the middle, read to the end \| 4\.5 \|/);
+});

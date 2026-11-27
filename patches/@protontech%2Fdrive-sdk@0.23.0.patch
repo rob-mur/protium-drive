@@ -1,23 +1,3 @@
-diff --git a/dist/internal/download/fileDownloader.js b/dist/internal/download/fileDownloader.js
-index b14fb6b79f0da15252dc00f7f09abbe82d9e9b1f..da423ec0eb841f314e6f159da3307d58cfa18bdc 100644
---- a/dist/internal/download/fileDownloader.js
-+++ b/dist/internal/download/fileDownloader.js
-@@ -146,7 +146,14 @@ export class FileDownloader {
-     async internalDownloadToStream(stream, onProgress) {
-         let ignoreIntegrityErrors = arguments.length > 2 && arguments[2] !== void 0 ? arguments[2] : false;
-         const writer = stream.getWriter();
--        const cryptoKeys = await this.cryptoService.getRevisionKeys(this.nodeKey, this.revision);
-+        let cryptoKeys;
-+        try {
-+            cryptoKeys = await this.cryptoService.getRevisionKeys(this.nodeKey, this.revision);
-+        } catch (error) {
-+            // proton-drive-mount patch: free the download slot when the keys cannot load.
-+            this.onFinish?.();
-+            throw error;
-+        }
-         // File progress is tracked for telemetry - to track at what
-         // point the download failed.
-         let fileProgress = 0;
 diff --git a/dist/interface/nodes.d.ts b/dist/interface/nodes.d.ts
 index 83ce8296d9658c5b6b4eb0a345429389ba5dc872..8486e32af4ef99c2a47dcb5b8dbd0b82765b8e65 100644
 --- a/dist/interface/nodes.d.ts
@@ -36,6 +16,44 @@ index 83ce8296d9658c5b6b4eb0a345429389ba5dc872..8486e32af4ef99c2a47dcb5b8dbd0b82
      /**
       * If the error is not related to any specific field, it is set here.
       *
+diff --git a/dist/internal/download/fileDownloader.js b/dist/internal/download/fileDownloader.js
+index b14fb6b79f0da15252dc00f7f09abbe82d9e9b1f..4c0aacf32d1de1c619d5cad9e932d7cdf925c266 100644
+--- a/dist/internal/download/fileDownloader.js
++++ b/dist/internal/download/fileDownloader.js
+@@ -42,6 +42,17 @@ export class FileDownloader {
+         this.signal = signal;
+         this.onFinish = onFinish;
+         this.ignoreManifestVerification = ignoreManifestVerification;
++        // proton-drive-mount patch: free the download slot once per downloader, however many
++        // seekable streams it opened and each of them finishes.
++        if (onFinish) {
++            let finished = false;
++            this.onFinish = ()=>{
++                if (!finished) {
++                    finished = true;
++                    onFinish();
++                }
++            };
++        }
+         this.controller = new DownloadController(this.signal);
+     }
+     getClaimedSizeInBytes() {
+@@ -146,7 +157,14 @@ export class FileDownloader {
+     async internalDownloadToStream(stream, onProgress) {
+         let ignoreIntegrityErrors = arguments.length > 2 && arguments[2] !== void 0 ? arguments[2] : false;
+         const writer = stream.getWriter();
+-        const cryptoKeys = await this.cryptoService.getRevisionKeys(this.nodeKey, this.revision);
++        let cryptoKeys;
++        try {
++            cryptoKeys = await this.cryptoService.getRevisionKeys(this.nodeKey, this.revision);
++        } catch (error) {
++            // proton-drive-mount patch: free the download slot when the keys cannot load.
++            this.onFinish?.();
++            throw error;
++        }
+         // File progress is tracked for telemetry - to track at what
+         // point the download failed.
+         let fileProgress = 0;
 diff --git a/dist/internal/nodes/cryptoService.js b/dist/internal/nodes/cryptoService.js
 index 54df77eed7a920f33614dd8cadd0a318519426d8..66ba31ebe44b84dc2e9585556481cea7fdfe97bd 100644
 --- a/dist/internal/nodes/cryptoService.js
