@@ -401,6 +401,61 @@ describe('My files', () => {
         expect(await new Response(stream).text()).toBe('3456789');
     });
 
+    describe('with a block fetch time', () => {
+        const BLOCK = 4 * 1024 * 1024;
+        const FETCH_MS = 200;
+
+        /** Uploads a file of `blocks` 4 MiB blocks and sets `blockFetchMs` in `drive.json`, as a seed writes it. */
+        function slowFile(blocks: number): string {
+            const uid = drive.add('big.bin', { type: 'file', content: new Uint8Array(blocks * BLOCK).fill(1) });
+            const path = join(dir, 'drive.json');
+            writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, 'utf8')), blockFetchMs: FETCH_MS }));
+            return uid;
+        }
+
+        async function timed<T>(work: () => Promise<T>): Promise<{ ms: number; value: T }> {
+            const began = performance.now();
+            const value = await work();
+            return { ms: performance.now() - began, value };
+        }
+
+        test('a read waits once for each block it fetches, one after the other, and not again for what it kept', async () => {
+            const uid = slowFile(3);
+            const stream = (await client.getFileDownloader(uid)).getSeekableStream();
+            await stream.seek(BLOCK - 10);
+            const first = await timed(() => stream.read(BLOCK));
+            expect(first.value.value.length).toBe(BLOCK);
+            expect(first.ms).toBeGreaterThanOrEqual(2 * FETCH_MS - 5);
+            expect(first.ms).toBeLessThan(3 * FETCH_MS);
+            const kept = await timed(() => stream.read(10));
+            expect(kept.ms).toBeLessThan(FETCH_MS / 2);
+        });
+
+        test('a seek back starts again at the block of the new position', async () => {
+            const uid = slowFile(2);
+            const stream = (await client.getFileDownloader(uid)).getSeekableStream();
+            await stream.read(BLOCK + 1);
+            await stream.seek(5);
+            const again = await timed(() => stream.read(1));
+            expect(again.ms).toBeGreaterThanOrEqual(FETCH_MS - 5);
+            expect(again.ms).toBeLessThan(2 * FETCH_MS);
+        });
+
+        test('streams of one downloader fetch at the same time', async () => {
+            const uid = slowFile(4);
+            const downloader = await client.getFileDownloader(uid);
+            const all = await timed(() =>
+                Promise.all([0, 1, 2, 3].map(async (block) => {
+                    const stream = downloader.getSeekableStream();
+                    await stream.seek(block * BLOCK);
+                    return (await stream.read(BLOCK)).value.length;
+                })),
+            );
+            expect(all.value).toEqual([BLOCK, BLOCK, BLOCK, BLOCK]);
+            expect(all.ms).toBeLessThan(2 * FETCH_MS);
+        });
+    });
+
     test('a seekable stream refuses to read zero or fewer bytes, as the SDK does', async () => {
         const root = await client.getMyFilesRootFolder();
         const uid = await upload(root.uid, 'a.txt', '0123456789');

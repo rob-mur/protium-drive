@@ -55,6 +55,8 @@ export class DriveSeed {
   private readonly files = new Map<string, SeedFile>();
   /** The Drive unlocks node keys and decrypts downloads for real, through the product's crypto pool (fake-drive/real-crypto.ts). */
   realCrypto = false;
+  /** What a seekable stream waits in real time for each 4 MiB block a read of it fetches, in ms (fake-drive/drive.ts). */
+  blockFetchMs = 0;
 
   folder(path: string): void {
     this.folders.add(path);
@@ -134,7 +136,7 @@ export class DriveSeed {
 
     mkdirSync(join(dir, "blobs"), { recursive: true });
     for (const [blob, content] of blobs) writeFileSync(join(dir, "blobs", blob), content);
-    writeFileSync(join(dir, "drive.json"), `${JSON.stringify({ format: 1, rootUid, nextId, nextEventId: 1, nodes, events: [], ...(this.realCrypto ? { realCrypto: true } : {}) }, null, 2)}\n`);
+    writeFileSync(join(dir, "drive.json"), `${JSON.stringify({ format: 1, rootUid, nextId, nextEventId: 1, nodes, events: [], ...(this.realCrypto ? { realCrypto: true } : {}), ...(this.blockFetchMs > 0 ? { blockFetchMs: this.blockFetchMs } : {}) }, null, 2)}\n`);
     return uids;
   }
 }
