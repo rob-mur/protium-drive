@@ -6,6 +6,7 @@
   { "glob": "LICENSE", "category": "non-production" },
   { "glob": ".gitignore", "category": "non-production" },
   { "glob": "vendor/README.md", "category": "non-production" },
+  { "glob": "renovate.json", "category": "non-production" },
   { "glob": "spec/support/send/**", "category": "frozen" },
   { "glob": "fake-drive/**", "category": "frozen" }
 ]
