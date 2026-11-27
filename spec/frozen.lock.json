@@ -368,6 +368,11 @@
       "id": "a-range-from-the-middle-of-a-file-gives-exactly-those-bytes",
       "path": "spec/features/range-read.feature",
       "expected_status": "green"
+    },
+    {
+      "id": "a-read-of-an-unlisted-file-during-a-walk-of-argon2-locked-files-starts-within-seconds",
+      "path": "spec/features/walk-read.feature",
+      "expected_status": "green"
     }
   ]
 }
