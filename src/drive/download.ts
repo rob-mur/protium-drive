@@ -209,7 +209,9 @@ async function streamRange(
         const chunk = (async () => {
             const seekable = (lanes[lane] ??= downloader.getSeekableStream());
             await seekable.seek(start);
-            return readFully(seekable, end - start + 1);
+            // The SDK's read gives every byte asked for unless the file ends first.
+            const { value } = await seekable.read(end - start + 1);
+            return { value, short: value.length < end - start + 1 };
         })();
         // A fetch the reader never reaches must not fail as an unhandled rejection.
         chunk.catch(() => {});
@@ -243,31 +245,6 @@ async function streamRange(
         },
         { highWaterMark: 0 },
     );
-}
-
-/** Reads `count` bytes from where `seekable` stands, or fewer if the file ends first (`short`). */
-async function readFully(seekable: Seekable, count: number): Promise<Chunk> {
-    const parts: Uint8Array[] = [];
-    let got = 0;
-    while (got < count) {
-        const { value, done } = await seekable.read(count - got);
-        if (value.length > 0) {
-            parts.push(value);
-            got += value.length;
-        }
-        if (done || value.length === 0) {
-            break;
-        }
-    }
-    const value = parts.length === 1 ? parts[0]! : new Uint8Array(got);
-    if (parts.length !== 1) {
-        let offset = 0;
-        for (const part of parts) {
-            value.set(part, offset);
-            offset += part.length;
-        }
-    }
-    return { value, short: got < count };
 }
 
 /** Drops bytes before `start` and after `end` (inclusive). */
