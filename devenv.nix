@@ -80,6 +80,11 @@
         exec tasks/unit-tests.sh
       '';
 
+      # The nodeModules output hash must match a from-scratch bun install, not a cached output.
+      commit.tasks.node-modules-hash.exec = ''
+        exec tasks/node-modules-hash.sh
+      '';
+
       # A source member publishes no bytes: the flake at a rev is what a consumer takes.
       artifact = null;
 

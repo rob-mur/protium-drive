@@ -48,7 +48,7 @@ let
   };
 
   # Production dependencies from bun.lock, with the patches in patches/ applied.
-  # Fixed-output: update `outputHash` when bun.lock changes (build once with
+  # Fixed-output: update `outputHash` when bun.lock or patches/ change (build once with
   # lib.fakeHash and copy the hash from the error).
   nodeModules = stdenvNoCC.mkDerivation {
     pname = "protium-drive-node-modules";
@@ -71,7 +71,7 @@ let
     dontFixup = true;
     outputHashMode = "recursive";
     outputHashAlgo = "sha256";
-    outputHash = "sha256-jBU/nX2aOWt3us0HBxfTlGrnuHkkKAKj06L1BBUkKBs=";
+    outputHash = "sha256-1y8aIO6T97mIgKJlUyUjS2/NB+/XT0cjmCTMjOgFz+s=";
   };
 in
 stdenvNoCC.mkDerivation {
