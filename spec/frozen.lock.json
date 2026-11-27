@@ -372,10 +372,7 @@
     {
       "id": "a-read-of-an-unlisted-file-during-a-walk-of-argon2-locked-files-starts-within-seconds",
       "path": "spec/features/walk-read.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the read gives the file's first (\\d+) KiB, its first byte comes within (\\d+) seconds, and the walk was still running when it ended$"
-      ]
+      "expected_status": "green"
     }
   ]
 }
