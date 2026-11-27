@@ -46,6 +46,10 @@
     # member built with coverage and writes the LCOV that ci:acceptance:spec-reach reads.
     coverage.run = [ (lib.getExe config.cd-pipeline.coverage.scripts.javascript.cucumber-js) ];
 
+    # cd-post-upgrade runs these after a Renovate bump whose rule in renovate.json names it: the
+    # vendored SDK tag in vendor/README.md moves, and vendor/ is copied again from that tag.
+    renovate.postUpgradeCommands = [ "tasks/vendor-sync.sh" ];
+
     verbs = {
       commit.tasks.workflows.exec = ''
         exec actionlint -config-file tasks/actionlint.yaml -- .forgejo/workflows/*.yml
@@ -62,6 +66,11 @@
         cd spec
         bun install --frozen-lockfile
         exec bun x tsc --noEmit -p .
+      '';
+
+      # Fails when vendor/ differs from ProtonDriveApps/sdk at the tag vendor/README.md records.
+      commit.tasks.vendor-drift.exec = ''
+        exec tasks/vendor-sync.sh --check
       '';
 
       # After typecheck: both run bun install in the root, and two installs at once into one
