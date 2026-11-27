@@ -24,6 +24,14 @@ esac
 root=$(git rev-parse --show-toplevel)
 upstream=${VENDOR_SYNC_UPSTREAM:-https://github.com/ProtonDriveApps/sdk}
 
+# Until vendor/README.md records a tag at all, --check has nothing to compare against and passes,
+# so this script can ship before the README moves from a commit to a tag. A line that starts
+# "Upstream tag:" but does not parse still refuses below.
+if [ "$mode" = check ] && ! grep -q '^Upstream tag:' "$root/vendor/README.md"; then
+  say "SKIP. vendor/README.md records no 'Upstream tag:' line yet."
+  exit 0
+fi
+
 # shellcheck disable=SC2016 # the backticks are literal markdown
 tag=$(sed -n 's/^Upstream tag: `\(js\/v[^`]*\)`$/\1/p' "$root/vendor/README.md")
 if [ -z "$tag" ] || [ "$(printf '%s\n' "$tag" | wc -l)" -ne 1 ]; then
