@@ -7,6 +7,6 @@ concurrency:
   cancel-in-progress: true
 jobs:
   cd-pipeline:
-    uses: rob/continuous-delivery/.cd/workflows/merge-request-title.yml@3d0f828f19e2775c0c8cae9a3c6d04ed8a6568d5
+    uses: rob/continuous-delivery/.cd/workflows/merge-request-title.yml@62058abc0c46a7bd15af867ea62aa9d55f9d55b5
     with:
       runs-on: nix-host-2cpu-4gb

@@ -7,13 +7,10 @@ concurrency:
   cancel-in-progress: true
 jobs:
   cd-pipeline:
-    uses: rob/continuous-delivery/.cd/workflows/merge-request.yml@3d0f828f19e2775c0c8cae9a3c6d04ed8a6568d5
+    uses: rob/continuous-delivery/.cd/workflows/merge-request.yml@62058abc0c46a7bd15af867ea62aa9d55f9d55b5
     with:
       acceptance-budget: "600"
       acceptance-runs-on: nix-host-2cpu-4gb-fuse
       commit-budget: "300"
       gate-reviewer: cd-pipeline
       runs-on: nix-host-2cpu-4gb
-    secrets:
-      CD_PIPELINE_TOKEN: ${{ secrets.CD_PIPELINE_TOKEN }}
-      REGISTRY_KEY_BASE64: ${{ secrets.REGISTRY_KEY_BASE64 }}

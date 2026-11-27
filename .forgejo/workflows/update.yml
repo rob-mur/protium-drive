@@ -1,0 +1,12 @@
+name: update
+on:
+  schedule: [{cron: 0 3 * * *}]
+  workflow_dispatch: {}
+concurrency:
+  group: cd-update
+  cancel-in-progress: false
+jobs:
+  cd-pipeline:
+    uses: rob/continuous-delivery/.cd/workflows/update.yml@62058abc0c46a7bd15af867ea62aa9d55f9d55b5
+    with:
+      runs-on: nix-host-2cpu-4gb
