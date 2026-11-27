@@ -99,6 +99,10 @@ function fakeDownloader(content: Uint8Array, observed: { aborted?: boolean } = {
 
 function sdkWith(downloader: FileDownloader & { setSignal?(signal: AbortSignal): void }, calls: string[] = []): DriveSdk {
     return {
+        getNode: async (uid: string) => {
+            calls.push(`node:${uid}`);
+            return { ok: true, value: { uid } };
+        },
         getFileDownloader: async (uid: string, signal: AbortSignal) => {
             calls.push(`downloader:${uid}`);
             downloader.setSignal?.(signal);
@@ -223,6 +227,7 @@ describe('openDownload', () => {
     test('a downloader that fails to open throws and aborts the download', async () => {
         const errors: unknown[] = [];
         const sdk = {
+            getNode: async () => ({ ok: true }),
             getFileDownloader: async () => {
                 throw new Error('no download slot');
             },
@@ -265,5 +270,47 @@ describe('openDownload', () => {
             openDownload(sdkWith(downloader), fileEntry(500), { logger: QUIET, onError: (e) => errors.push(e) }),
         ).rejects.toThrow('verification failed');
         expect(errors).toHaveLength(1);
+    });
+
+    test('a read that waits for its node keys holds no download slot (#163)', async () => {
+        // As the SDK: getFileDownloader takes one of 5 slots, then waits for the node's keys,
+        // which getNode also unlocks. Five files' keys wait on crypto; one file's are ready.
+        const slots = { used: 0, waiting: [] as (() => void)[] };
+        const unlocks = new Map<string, Promise<void>>();
+        const unlockAll: (() => void)[] = [];
+        const keysOf = (uid: string) => {
+            if (!unlocks.has(uid)) {
+                unlocks.set(uid, uid === 'ready' ? Promise.resolve() : new Promise<void>((done) => unlockAll.push(done)));
+            }
+            return unlocks.get(uid)!;
+        };
+        const sdk = {
+            getNode: async (uid: string) => {
+                await keysOf(uid);
+                return { ok: true, value: { uid } };
+            },
+            getFileDownloader: async (uid: string, signal: AbortSignal) => {
+                while (slots.used >= 5) await new Promise<void>((free) => slots.waiting.push(free));
+                slots.used++;
+                await keysOf(uid);
+                const downloader = fakeDownloader(bytes(10));
+                downloader.setSignal(signal);
+                signal.addEventListener('abort', () => {
+                    slots.used--;
+                    slots.waiting.shift()?.();
+                });
+                return downloader;
+            },
+        } as unknown as DriveSdk;
+        const file = (uid: string) => ({ ...fileEntry(10), uid });
+
+        const waiting = ['a', 'b', 'c', 'd', 'e'].map((uid) => openDownload(sdk, file(uid), { logger: QUIET }));
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        const ready = openDownload(sdk, file('ready'), { logger: QUIET });
+        const first = await Promise.race([ready.then(readAll), new Promise((resolve) => setTimeout(() => resolve('blocked'), 200))]);
+        expect(first).toEqual(bytes(10));
+
+        for (const unlock of unlockAll) unlock();
+        for (const read of await Promise.all(waiting)) expect(await readAll(read)).toEqual(bytes(10));
     });
 });
