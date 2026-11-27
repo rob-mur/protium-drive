@@ -1,0 +1,32 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "The ProtonDriveApps/sdk tag that vendor/ is copied from.",
+      "managerFilePatterns": ["/^vendor/README\\.md$/"],
+      "matchStrings": ["<!-- renovate: tag -->\\nUpstream tag: `js/v(?<currentValue>[^`]+)`"],
+      "depNameTemplate": "proton-sdk-vendor",
+      "packageNameTemplate": "ProtonDriveApps/sdk",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^js/v(?<version>.*)$",
+      "versioningTemplate": "semver"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "The Proton SDK, its crypto and the vendored code move in one pull request.",
+      "matchDepNames": ["@protontech/drive-sdk", "@protontech/crypto", "proton-sdk-vendor"],
+      "groupName": "proton sdk"
+    },
+    {
+      "description": "Copy vendor/ again from the new tag. Only this dep runs it, so the bun deps keep the preset's cd-update-patches.",
+      "matchDepNames": ["proton-sdk-vendor"],
+      "postUpgradeTasks": {
+        "commands": ["devenv shell -- cd-post-upgrade"],
+        "fileFilters": ["vendor/**"],
+        "executionMode": "update"
+      }
+    }
+  ]
+}
