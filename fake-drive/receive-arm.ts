@@ -20,6 +20,8 @@
  *   unless `print` says otherwise.
  * - With `realCrypto` in `DIR/drive.json`, the client does the SDK's crypto through the product's
  *   crypto pool (real-crypto.ts).
+ * - With `blockFetchMs` in `DIR/drive.json`, a seekable stream waits that long in real time for
+ *   each 4 MiB block that a read of it fetches, as the SDK waits for Proton's block downloads.
  * - `stop()` closes the control channel and ends any crypto workers the client started. The
  *   Drive's state is already in `DIR`.
  *

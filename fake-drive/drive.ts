@@ -76,6 +76,8 @@ export type SdkSurface = Pick<
 export const SCOPE_ID = 'volume-1';
 const OWNER = 'receive-arm@fake-drive.invalid';
 const DOWNLOAD_CHUNK = 64 * 1024;
+/** Proton's block size: the unit a seekable stream fetches (`DriveState.blockFetchMs`). */
+const BLOCK_SIZE = 4 * 1024 * 1024;
 /** The NAME_TAKEN code the SDK gives with a name clash. */
 export const NAME_TAKEN = 2500;
 const MAX_NAME_LENGTH = 255;
@@ -96,6 +98,11 @@ export type DriveState = {
      * crypto pool. Absent: it does no crypto.
      */
     realCrypto?: boolean;
+    /**
+     * Wall-clock milliseconds a seekable stream waits for each 4 MiB block that a read of it
+     * fetches, as the SDK waits for a block's token and its download. Absent: no wait.
+     */
+    blockFetchMs?: number;
 };
 
 export type NodeRecord = {
@@ -212,6 +219,12 @@ export class FakeDrive {
     get realCrypto(): boolean {
         this.sync();
         return this.state.realCrypto === true;
+    }
+
+    /** What a seekable stream waits per block it fetches (`DriveState.blockFetchMs`), in ms. */
+    get blockFetchMs(): number {
+        this.sync();
+        return this.state.blockFetchMs ?? 0;
     }
 
     // --- reads, for the control channel ------------------------------------
@@ -684,7 +697,7 @@ export class FakeDriveClient implements SdkSurface {
             getClaimedSizeInBytes: () => claimedSize,
             downloadToStream: download,
             unsafeDownloadToStream: download,
-            getSeekableStream: () => (failure ? failingSeekable(failure) : seekable(content)),
+            getSeekableStream: () => (failure ? failingSeekable(failure) : seekable(content, this.drive.blockFetchMs)),
         };
     }
 
@@ -1043,12 +1056,25 @@ async function writeAll(pending: Uint8Array | Promise<Uint8Array>, writable: Wri
     writer.releaseLock();
 }
 
-/** The SDK's seekable stream over `content`, once it has come: `seek` to a byte, then `read` up to a count of bytes. */
-function seekable(pending: Uint8Array | Promise<Uint8Array>): SeekableReadableStream {
+/**
+ * The SDK's seekable stream over `content`, once it has come: `seek` to a byte, then `read` up to a
+ * count of bytes. With `blockFetchMs`, it costs what the SDK's does in real time: a read fetches
+ * the blocks it needs one after the other, `blockFetchMs` each, and keeps what is left of the last
+ * one; a seek outside what it keeps starts again at the block of the new position. Streams fetch
+ * at the same time without slowing each other.
+ */
+function seekable(pending: Uint8Array | Promise<Uint8Array>, blockFetchMs = 0): SeekableReadableStream {
     let position = 0;
+    // The end of the bytes this stream has fetched, from the block of the last seek outside them.
+    let fetchedTo = 0;
     const read = async (count: number) => {
         if (count <= 0) throw new Error('Invalid number of bytes to read');
         const content = await pending;
+        const want = Math.min(position + count, content.length);
+        while (blockFetchMs > 0 && fetchedTo < want) {
+            await new Promise((resolve) => setTimeout(resolve, blockFetchMs));
+            fetchedTo += BLOCK_SIZE;
+        }
         const value = content.slice(position, position + count);
         position += value.length;
         return { value, done: position >= content.length };
@@ -1064,6 +1090,7 @@ function seekable(pending: Uint8Array | Promise<Uint8Array>): SeekableReadableSt
     return Object.assign(stream, {
         read,
         seek: (to: number) => {
+            if (to < position || to > fetchedTo) fetchedTo = Math.floor(to / BLOCK_SIZE) * BLOCK_SIZE;
             position = to;
         },
     });
