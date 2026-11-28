@@ -11,6 +11,25 @@ Given(/^(?:a Drive whose|the Drive's) My files holds the file "([^"]*)" containi
   this.seed.file(path, { content: text(content) });
 });
 
+// The names no path can hold: each is one name in the Drive, but a path would read it as
+// another segment, as no segment, or as cut off, and Linux holds no name over 255 bytes.
+export const UNREACHABLE_NAMES: Record<string, string> = {
+  ".": ".",
+  "..": "..",
+  "a slash": "a/b",
+  "a NUL": "a\0b",
+  "300 bytes": "x".repeat(300),
+};
+
+Given(
+  /^the Drive's "([^"]*)" also holds a file named each of "\.", "\.\.", one with a slash, one with a NUL, and one of 300 bytes$/,
+  function (this: DriveWorld, folder: string) {
+    for (const [label, name] of Object.entries(UNREACHABLE_NAMES)) {
+      this.seed.file(`${folder}/unreachable name ${label}`, { content: text("hidden"), name });
+    }
+  },
+);
+
 // The modification time the arranged files' client claimed: the migration is to keep it.
 export const CLAIMED_MODIFICATION_TIME = "2026-08-14T09:30:00.000Z";
 
