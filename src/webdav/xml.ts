@@ -75,7 +75,7 @@ const encoder = new TextEncoder();
  * Streams a PROPFIND multistatus body: the target first, then its children,
  * ENTRIES_PER_CHUNK of them at a time as the reader asks, so a large folder's
  * XML never sits in memory whole (#183). `onEnd` runs once, when the body is
- * read to its end, fails or is cancelled. `before` runs ahead of the first chunk.
+ * read to its end or is cancelled. `before` runs ahead of the first chunk.
  */
 export function multistatusStream(
     segments: string[],
