@@ -94,34 +94,29 @@ export function multistatusStream(
     return new ReadableStream<Uint8Array>(
         {
             async pull(controller) {
-                try {
-                    if (next < 0) {
-                        await hooks.before?.();
-                        next = 0;
-                        controller.enqueue(
-                            encoder.encode(
-                                `<?xml version="1.0" encoding="utf-8"?>\n<D:multistatus xmlns:D="DAV:">${propResponse(segments, target)}`,
-                            ),
-                        );
-                        return;
-                    }
-                    if (next >= children.length) {
-                        controller.enqueue(encoder.encode('</D:multistatus>\n'));
-                        controller.close();
-                        end();
-                        return;
-                    }
-                    let chunk = '';
-                    const stop = Math.min(next + ENTRIES_PER_CHUNK, children.length);
-                    for (; next < stop; next++) {
-                        const child = children[next];
-                        chunk += `\n${propResponse([...segments, child.name], child)}`;
-                    }
-                    controller.enqueue(encoder.encode(chunk));
-                } catch (error: unknown) {
-                    end();
-                    throw error;
+                if (next < 0) {
+                    await hooks.before?.();
+                    next = 0;
+                    controller.enqueue(
+                        encoder.encode(
+                            `<?xml version="1.0" encoding="utf-8"?>\n<D:multistatus xmlns:D="DAV:">${propResponse(segments, target)}`,
+                        ),
+                    );
+                    return;
                 }
+                if (next >= children.length) {
+                    controller.enqueue(encoder.encode('</D:multistatus>\n'));
+                    controller.close();
+                    end();
+                    return;
+                }
+                let chunk = '';
+                const stop = Math.min(next + ENTRIES_PER_CHUNK, children.length);
+                for (; next < stop; next++) {
+                    const child = children[next];
+                    chunk += `\n${propResponse([...segments, child.name], child)}`;
+                }
+                controller.enqueue(encoder.encode(chunk));
             },
             cancel: end,
         },
