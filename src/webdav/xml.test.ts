@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test';
+import fc from 'fast-check';
+import { SaxesParser } from 'saxes';
 
 import type { Entry } from '../drive/entry.ts';
 import { etagFor, escapeXml, multistatus } from './xml.ts';
@@ -42,5 +44,55 @@ describe('multistatus', () => {
         expect(body.indexOf('/Docs/')).toBeLessThan(body.indexOf('/Docs/note.txt'));
         expect(body).toContain('<D:getcontentlength>3</D:getcontentlength>');
         expect(body).toContain('<D:resourcetype><D:collection/></D:resourcetype>');
+    });
+});
+
+/** Parses `body` as strict XML 1.0 and returns the text of every element with `localName`. */
+function textsOf(body: string, localName: string): string[] {
+    const parser = new SaxesParser({ xmlns: true });
+    const texts: string[] = [];
+    let current: string | undefined;
+    parser.on('opentag', (tag) => {
+        if (tag.local === localName) {
+            current = '';
+        }
+    });
+    parser.on('text', (text) => {
+        if (current !== undefined) {
+            current += text;
+        }
+    });
+    parser.on('closetag', (tag) => {
+        if (tag.local === localName && current !== undefined) {
+            texts.push(current);
+            current = undefined;
+        }
+    });
+    parser.write(body).close();
+    return texts;
+}
+
+describe('multistatus with names XML 1.0 forbids', () => {
+    test('a control character in a name or media type still gives well-formed XML', () => {
+        const body = multistatus(['Docs'], entry({ name: 'Docs' }), [
+            entry({ uid: 'uid-2', name: 'bad\u0001.txt', kind: 'file', mediaType: 'text/\u001fplain' }),
+            entry({ uid: 'uid-3', name: 'ok.txt', kind: 'file' }),
+        ]);
+        expect(textsOf(body, 'href')).toEqual(['/Docs/', '/Docs/bad%01.txt', '/Docs/ok.txt']);
+        expect(textsOf(body, 'displayname')).toEqual(['Docs', 'bad\uFFFD.txt', 'ok.txt']);
+        expect(textsOf(body, 'getcontenttype')).toEqual(['text/\uFFFDplain', 'application/octet-stream']);
+    });
+
+    test('any Unicode name parses, and its href decodes back to the name', () => {
+        fc.assert(
+            fc.property(fc.string({ unit: 'binary', minLength: 1 }), fc.string({ unit: 'binary' }), (name, mediaType) => {
+                const body = multistatus(['Docs'], entry({ name: 'Docs' }), [
+                    entry({ uid: 'uid-2', name, kind: 'file', mediaType }),
+                ]);
+                const child = textsOf(body, 'href')[1];
+                expect(child).toBeDefined();
+                expect(decodeURIComponent(child!.slice('/Docs/'.length))).toBe(name);
+            }),
+        );
     });
 });
