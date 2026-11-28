@@ -135,6 +135,14 @@ Given(/^the user keeps the serve's credential in a file that other users can rea
   this.credentialFile = { mode: 0o644 };
 });
 
+Given(/^the user serves the Drive with no credential$/, function (this: DriveWorld) {
+  this.noCredential = true;
+});
+
+Given(/^the user cannot write to the serve's state folder$/, function (this: DriveWorld) {
+  this.stateReadOnly = true;
+});
+
 Given(/^the user mounts the Drive at a folder$/, function (this: DriveWorld) {
   this.mounted = true;
 });

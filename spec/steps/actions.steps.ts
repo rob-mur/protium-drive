@@ -36,6 +36,10 @@ When(/^the user starts the serve$/, async function (this: DriveWorld) {
   await this.startServe();
 });
 
+When(/^the user starts the serve on "([^"]*)"$/, async function (this: DriveWorld, host: string) {
+  await this.startServe(host);
+});
+
 When(/^the access token expires$/, async function (this: DriveWorld) {
   await this.expireAccessToken();
 });

@@ -2,6 +2,8 @@
 // DNS rebinding, a program without the mount's or the serve's credential, and a program that reads `ps`.
 import { Then, When } from "@cucumber/cucumber";
 
+import { statSync } from "node:fs";
+
 import type { CallCounts } from "../support/send/control.ts";
 import { claim } from "./claims.ts";
 import type { DriveWorld, LocalRequestRecord } from "./world.ts";
@@ -61,6 +63,34 @@ Then(/^the serve's port listens on ([0-9.]+) and on no other address$/, function
   claim(addresses.includes(address), () => `the serve's port does not listen on ${address}.\n${this.whatHappened()}`);
   const others = addresses.filter((each) => each !== address);
   claim(others.length === 0, () => `the serve's port also listens on ${others.join(", ")}.\n${this.whatHappened()}`);
+});
+
+Then(/^the serve's port answers the program with the listing of "([^"]*)"$/, function (this: DriveWorld, folder: string) {
+  const request: LocalRequestRecord | undefined = this.localRequests.at(-1);
+  claim(request, () => `no other program sent a request.\n${this.whatHappened()}`);
+  claim(request.answer.status === 207, () => `${request.who} got ${request.answer.status ?? "no answer"}, not 207.\n${this.whatHappened()}`);
+  const uid = this.uids.get(folder);
+  claim(uid, () => `the arranged Drive has no folder "${folder}".\n${this.whatHappened()}`);
+  claim(request.callsBefore && request.callsAfter, () => `the Drive's calls could not be read.\n${this.whatHappened()}`);
+  const listed = (calls: CallCounts) => calls.listings[uid] ?? 0;
+  claim(listed(request.callsAfter) > listed(request.callsBefore), () => `the Drive did not list "${folder}" for ${request.who}.\n${this.whatHappened()}`);
+});
+
+Then(/^the serve made a credential in its state folder, in a file only the user can read$/, async function (this: DriveWorld) {
+  const serve = this.serve;
+  claim(serve, () => `the serve was never started.\n${this.whatHappened()}`);
+  claim(serve.process.running, () => `the serve is not running.\n${this.whatHappened()}`);
+  const path = this.madeCredentialPath();
+  let mode: number | undefined;
+  try {
+    mode = statSync(path).mode & 0o777;
+  } catch {
+    mode = undefined;
+  }
+  claim(mode !== undefined, () => `the serve made no file ${path}.\n${this.whatHappened()}`);
+  claim(mode === 0o600, () => `the serve's credential file has mode ${mode!.toString(8)}, not 600.\n${this.whatHappened()}`);
+  claim((serve.credential ?? "").length >= 32, () => `the serve's credential file holds no credential of 32 characters or more.\n${this.whatHappened()}`);
+  claim(serve.process.output.includes(path), () => `the serve did not tell the user where its credential is (${path}).\n${this.whatHappened()}`);
 });
 
 function refusedBeforeTheDrive(world: DriveWorld, status: number, folder: string): void {

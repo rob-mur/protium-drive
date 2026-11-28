@@ -10,13 +10,13 @@ export interface RawAnswer {
   error?: string;
 }
 
-/** `PROPFIND` with `Depth: infinity` on the folder `path` of the serve at `url`. */
-export async function propfindWholeTree(url: string, path: string): Promise<RawAnswer> {
+/** `PROPFIND` with `Depth: infinity` on the folder `path` of the serve at `url`, with the serve's `credential` when it has one. */
+export async function propfindWholeTree(url: string, path: string, credential?: string): Promise<RawAnswer> {
   const target = new URL(`${path.split("/").map(encodeURIComponent).join("/")}/`, url);
   try {
     const response = await fetch(target, {
       method: "PROPFIND",
-      headers: { Depth: "infinity", "Content-Type": "application/xml" },
+      headers: { Depth: "infinity", "Content-Type": "application/xml", ...(credential ? { Authorization: `Bearer ${credential}` } : {}) },
       body: '<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:"><D:allprop/></D:propfind>',
       signal: AbortSignal.timeout(60_000),
     });

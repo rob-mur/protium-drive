@@ -65,6 +65,8 @@ export interface Serving {
   url: string;
   /** The Receive arm's control channel, once the process has printed it. */
   control?: Control;
+  /** The credential a client must send, when the process demands one the World knows. */
+  credential?: string;
 }
 
 export type ActionKind = "list" | "stat" | "read" | "write" | "delete" | "make folder" | "remove folder" | "move";
@@ -134,6 +136,15 @@ export class DriveWorld extends World {
   credentialFile?: { mode: number };
   /** The serve's credential, as the file holds it. */
   readonly credential = randomBytes(32).toString("hex");
+  /** The user starts the serve with `--no-credential`. */
+  noCredential = false;
+  /** The user cannot write to the serve's state folder once they have signed in. */
+  stateReadOnly = false;
+  /**
+   * The credential a serve without a credential file made in its state folder, as the user read
+   * it the first time; a restarted serve must take the same one.
+   */
+  madeCredential?: string;
 
   // --- what the Whens record --------------------------------------------------
   /** The UID of each node the arranged Drive held, by path. */
@@ -358,6 +369,31 @@ export class DriveWorld extends World {
     }
     if (this.signedIn) this.setupSignIn = await this.signIn();
     if (this.sessionRefused) await this.refuseTheSession();
+    if (this.stateReadOnly) {
+      try {
+        mkdirSync(this.dirs.state, { recursive: true, mode: 0o700 });
+        chmodSync(this.dirs.state, 0o500);
+      } catch (error: unknown) {
+        this.trouble(`the state folder could not be made read-only: ${String(error)}`);
+      }
+    }
+  }
+
+  /** Where a serve without a credential file keeps the credential it makes. */
+  madeCredentialPath(): string {
+    return join(this.dirs.state, "serve-credential");
+  }
+
+  /**
+   * The credential the user's client sends to a serve: the one in the user's own file, else the
+   * one the serve made in its state folder (read once, the first time it is there), else none.
+   */
+  private serveCredential(): string | undefined {
+    if (this.credentialFile) return this.credential;
+    if (this.madeCredential === undefined && existsSync(this.madeCredentialPath())) {
+      this.madeCredential = readFileSync(this.madeCredentialPath(), "utf8").trim();
+    }
+    return this.madeCredential;
   }
 
   private credentialPath(): string {
@@ -380,7 +416,7 @@ export class DriveWorld extends World {
     if (control) {
       await this.attempt("making the account refuse the next refresh", () => control.refuseNextRefresh());
       await this.attempt("expiring the access token", () => control.expireAccessToken());
-      await new Rclone(url).list("");
+      await new Rclone(url, undefined, this.serveCredential()).list("");
     } else this.trouble("the serve that was to have the session refused printed no control channel");
     await running.stop();
   }
@@ -397,13 +433,14 @@ export class DriveWorld extends World {
       ...(this.host ? ["--host", this.host] : []),
       ...(this.root ? ["--root", this.root] : []),
       ...(this.credentialFile ? ["--credential-file", this.credentialPath()] : []),
+      ...(this.noCredential ? ["--no-credential"] : []),
       ...this.logLevelArgs(),
     ];
   }
 
-  /** The user's WebDAV client of the serve at `url`: it sends the serve's credential when the user keeps one. */
-  private client(url: string): Rclone {
-    return new Rclone(url, undefined, this.credentialFile ? this.credential : undefined);
+  /** The user's WebDAV client of `serving`: it sends the credential the serve demands. */
+  private client(serving: Serving): Rclone {
+    return new Rclone(serving.url, undefined, serving.credential);
   }
 
   private logLevelArgs(): string[] {
@@ -428,6 +465,7 @@ export class DriveWorld extends World {
       this.trouble(`the serve did not answer on ${url} within ${START_MS / 1000} s: ${running.describe()}`);
     }
     serve.control = Control.fromOutput(running.output);
+    serve.credential = this.serveCredential();
     await this.setFaults(serve);
     return serve;
   }
@@ -489,7 +527,7 @@ export class DriveWorld extends World {
   private async act(kind: ActionKind, path: string, run: (client: Rclone) => Promise<Outcome>): Promise<Action> {
     const serving = await this.ensureServing();
     const callsBefore = await this.calls(serving);
-    const outcome = await run(this.client(serving.url));
+    const outcome = await run(this.client(serving));
     const action: Action = { kind, path, outcome, callsBefore, callsAfter: await this.calls(serving) };
     this.actions.push(action);
     return action;
@@ -531,7 +569,7 @@ export class DriveWorld extends World {
     const serving = await this.ensureServing();
     const callsBefore = await this.calls(serving);
     const started = (calls?: CallCounts) => calls?.methods.uploadFromStream ?? 0;
-    const writing = this.client(serving.url).write(path, new TextEncoder().encode(text));
+    const writing = this.client(serving).write(path, new TextEncoder().encode(text));
     let ended = false;
     void writing.then(() => (ended = true));
     const uploading = await poll(async () => ended || started(await this.calls(serving)) > started(callsBefore), { withinMs: START_MS }).then(
@@ -557,7 +595,7 @@ export class DriveWorld extends World {
     const count = (method: string) => (calls?: CallCounts) => calls?.methods[method] ?? 0;
     const start = async (target: string, content: string, method: string, what: string) => {
       const before = await this.calls(serving);
-      const writing = this.client(serving.url).write(target, new TextEncoder().encode(content));
+      const writing = this.client(serving).write(target, new TextEncoder().encode(content));
       let ended = false;
       void writing.then(() => (ended = true));
       const reached = await poll(async () => ended || count(method)(await this.calls(serving)) > count(method)(before), { withinMs: START_MS }).then(
@@ -588,7 +626,7 @@ export class DriveWorld extends World {
     const serving = await this.ensureServing();
     const callsBefore = await this.calls(serving);
     const asked = (calls?: CallCounts) => calls?.methods.getFileUploader ?? 0;
-    const writing = new Rclone(serving.url).write(path, new TextEncoder().encode(text));
+    const writing = this.client(serving).write(path, new TextEncoder().encode(text));
     let ended = false;
     void writing.then(() => (ended = true));
     const waiting = await poll(async () => ended || asked(await this.calls(serving)) > asked(callsBefore), { withinMs: START_MS }).then(
@@ -621,7 +659,7 @@ export class DriveWorld extends World {
   async askWholeTree(path: string): Promise<void> {
     const serving = await this.ensureServing();
     const callsBefore = await this.calls(serving);
-    const answer = await propfindWholeTree(serving.url, path);
+    const answer = await propfindWholeTree(serving.url, path, serving.credential);
     this.wholeTree = { answer, callsBefore, callsAfter: await this.calls(serving) };
   }
 
@@ -959,6 +997,7 @@ export class DriveWorld extends World {
     await Promise.all(this.processes.map((running) => running.stop()));
     if (!this.scratch) return;
     const { root, mountpoint } = this.scratch;
+    if (this.stateReadOnly && existsSync(this.dirs.state)) chmodSync(this.dirs.state, 0o700);
     if (isMounted(mountpoint)) await unmount(mountpoint);
     // Never remove through a mount that is still there.
     if (isMounted(mountpoint)) {
