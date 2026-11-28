@@ -85,9 +85,14 @@ function textsOf(body: string, localName: string): string[] {
     return texts;
 }
 
+/** The whole streamed multistatus body, as one string. */
+function multistatus(segments: string[], target: Entry, children: Entry[]): Promise<string> {
+    return new Response(multistatusStream(segments, target, children)).text();
+}
+
 describe('multistatus with names XML 1.0 forbids', () => {
-    test('a control character in a name or media type still gives well-formed XML', () => {
-        const body = multistatus(['Docs'], entry({ name: 'Docs' }), [
+    test('a control character in a name or media type still gives well-formed XML', async () => {
+        const body = await multistatus(['Docs'], entry({ name: 'Docs' }), [
             entry({ uid: 'uid-2', name: 'bad\u0001.txt', kind: 'file', mediaType: 'text/\u001fplain' }),
             entry({ uid: 'uid-3', name: 'ok.txt', kind: 'file' }),
         ]);
@@ -96,10 +101,10 @@ describe('multistatus with names XML 1.0 forbids', () => {
         expect(textsOf(body, 'getcontenttype')).toEqual(['text/\uFFFDplain', 'application/octet-stream']);
     });
 
-    test('any Unicode name parses, and its href decodes back to the name', () => {
-        fc.assert(
-            fc.property(fc.string({ unit: 'binary', minLength: 1 }), fc.string({ unit: 'binary' }), (name, mediaType) => {
-                const body = multistatus(['Docs'], entry({ name: 'Docs' }), [
+    test('any Unicode name parses, and its href decodes back to the name', async () => {
+        await fc.assert(
+            fc.asyncProperty(fc.string({ unit: 'binary', minLength: 1 }), fc.string({ unit: 'binary' }), async (name, mediaType) => {
+                const body = await multistatus(['Docs'], entry({ name: 'Docs' }), [
                     entry({ uid: 'uid-2', name, kind: 'file', mediaType }),
                 ]);
                 const child = textsOf(body, 'href')[1];
