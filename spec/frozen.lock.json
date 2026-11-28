@@ -382,10 +382,7 @@
     {
       "id": "a-name-no-path-can-hold-is-not-listed-and-its-skip-is-logged-once",
       "path": "spec/features/unreachable-names.feature",
-      "expected_status": "red",
-      "failing_step": [
-        "^the listing of \"([^\"]*)\" shows only \"([^\"]*)\", and the serve warned once of each of those files that it skipped it$"
-      ]
+      "expected_status": "green"
     }
   ]
 }
