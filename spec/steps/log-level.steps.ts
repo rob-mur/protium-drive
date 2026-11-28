@@ -1,6 +1,7 @@
 // The steps about the log level: the option and the variable the user sets it with, what the help
 // says of them, and the lines the serve, the mount and the rclone it runs write to stderr; and the
-// warnings the serve writes when Proton's requirement headers ask for a newer build.
+// warnings the serve writes when Proton's requirement headers ask for a newer build; and that a line
+// break in a value the serve logs cannot forge a second log line.
 import { Given, Then, When } from "@cucumber/cucumber";
 
 import { Control } from "../support/send/control.ts";
@@ -58,6 +59,13 @@ Given(/^the environment the user mounts the Drive in sets PDM_LOG_LEVEL to "([^"
 Given(/^the user serves the Drive with the log level "([^"]*)"$/, function (this: DriveWorld, level: string) {
   this.logLevel = level;
 });
+
+Given(
+  /^the user serves the Drive with the root folder "([^"]*)", a line break, then "([^"]*)", which My files does not hold$/,
+  function (this: DriveWorld, before: string, after: string) {
+    this.root = `${before}\n${after}`;
+  },
+);
 
 // --- Whens ----------------------------------------------------------------------------------------
 
@@ -166,3 +174,14 @@ Then(/^the listing succeeds, and the serve wrote no debug or info lines$/, funct
   const own = [...ownLines(serve.process.stderr, "debug"), ...ownLines(serve.process.stderr, "info")];
   claim(own.length === 0, () => `the serve wrote debug or info lines:\n${own.join("\n")}\n${this.whatHappened()}`);
 });
+
+Then(
+  /^the serve warned that the root folder "([^"]*)" does not exist, each time on one line, and wrote no line that starts "([^"]*)"$/,
+  async function (this: DriveWorld, escaped: string, forged: string) {
+    const warnings = await warningsSaying(this, `Root folder /${escaped} does not exist`);
+    claim(warnings.length > 0, () => `the serve wrote no one-line warning that the root folder "${escaped}" does not exist.\n${this.whatHappened()}`);
+    const serve = this.serve!;
+    const forgedLines = lines(serve.process.stderr).filter((line) => line.startsWith(forged));
+    claim(forgedLines.length === 0, () => `the serve wrote ${forgedLines.length} line(s) that start "${forged}":\n${forgedLines.join("\n")}\n${this.whatHappened()}`);
+  },
+);

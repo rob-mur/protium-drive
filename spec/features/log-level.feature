@@ -54,3 +54,10 @@ Feature: One log level for the binary and the rclone it runs
     And the user serves the Drive with the log level "warn"
     When the user lists "Photos"
     Then the listing succeeds, and the serve wrote no debug or info lines
+
+  @id:a-line-break-in-a-logged-value-cannot-forge-a-log-line
+  Scenario: A line break in a value the serve logs comes out as \n, so it cannot forge a second log line
+    Given a Drive whose My files holds the folder "Photos"
+    And the user serves the Drive with the root folder "Photos", a line break, then "error: forged", which My files does not hold
+    When the user lists ""
+    Then the serve warned that the root folder "Photos\nerror: forged" does not exist, each time on one line, and wrote no line that starts "error: forged"
