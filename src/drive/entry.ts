@@ -56,11 +56,26 @@ export function toEntry(node: NodeEntity): Entry | Skipped {
         kind: 'file',
         size: revision.claimedSize,
         modified: revision.claimedModificationTime ?? node.modificationTime,
-        mediaType: node.mediaType,
+        mediaType: node.mediaType === undefined ? undefined : cleanMediaType(node.mediaType),
         sha1: revision.claimedDigests?.sha1,
         revisionUid: revision.uid,
         armoredNodeKey: node.encryptedCrypto?.armoredKey,
     };
+}
+
+// RFC 9110 section 8.3.1: type "/" subtype *( OWS ";" OWS [ name "=" ( token / quoted-string ) ] ),
+// kept to US-ASCII so the value is always a valid header value.
+const TOKEN = "[!#$%&'*+.^_`|~0-9A-Za-z-]+";
+const QUOTED_STRING = '"(?:[\\t \\x21\\x23-\\x5b\\x5d-\\x7e]|\\\\[\\t \\x21-\\x7e])*"';
+const MEDIA_TYPE = new RegExp(`^${TOKEN}/${TOKEN}(?:[ \\t]*;[ \\t]*(?:${TOKEN}=(?:${TOKEN}|${QUOTED_STRING}))?)*$`);
+
+/**
+ * The Drive's media type when it is a valid media type, else `application/octet-stream`. The value
+ * comes from whoever uploaded the file and goes into the Content-Type header and PROPFIND, so a CR,
+ * LF or other control character in it must never reach them.
+ */
+function cleanMediaType(mediaType: string): string {
+    return MEDIA_TYPE.test(mediaType) ? mediaType : 'application/octet-stream';
 }
 
 export function isSkipped(value: Entry | Skipped): value is Skipped {

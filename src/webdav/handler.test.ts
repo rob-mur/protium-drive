@@ -9,6 +9,8 @@ import {
     ServerError,
     NodeWithSameNameExistsValidationError,
     ValidationError,
+    NodeType,
+    type NodeEntity,
 } from '@protontech/drive-sdk';
 
 import { Backoff } from '../drive/backoff.ts';
@@ -16,7 +18,7 @@ import { DriveError } from '../drive/errors.ts';
 import { DriveTree } from '../drive/tree.ts';
 import { createWebDavHandler, parseRange } from './handler.ts';
 import { FailedPutGuard } from './guard.ts';
-import type { Entry } from '../drive/entry.ts';
+import { type Entry, toEntry } from '../drive/entry.ts';
 import type { ByteRange } from '../drive/download.ts';
 
 const ROOT: Entry = {
@@ -286,6 +288,25 @@ describe('GET and HEAD', () => {
         expect(await folder.text()).toContain('use PROPFIND');
         const missing = await handle(new Request('http://127.0.0.1/nope'));
         expect(missing.status).toBe(404);
+    });
+
+    test('a Drive media type that is not a media type is served as application/octet-stream', async () => {
+        const node = {
+            uid: 'uid-inject.txt',
+            parentUid: 'root',
+            type: NodeType.File,
+            name: { ok: true, value: 'inject.txt' },
+            mediaType: 'text/plain\r\nX: y',
+            creationTime: new Date('2026-01-01T00:00:00Z'),
+            modificationTime: new Date('2026-02-01T00:00:00Z'),
+            activeRevision: { uid: 'rev-inject', claimedSize: 3 },
+            treeEventScopeId: 'volume-1',
+        } as unknown as NodeEntity;
+        const entry = toEntry(node) as Entry;
+        const tree = treeWithFiles({ 'inject.txt': entry }, () => new Uint8Array([1, 2, 3]));
+        const response = await serve(tree)(new Request('http://127.0.0.1/inject.txt'));
+        expect(response.status).toBe(200);
+        expect(response.headers.get('Content-Type')).toBe('application/octet-stream');
     });
 });
 
