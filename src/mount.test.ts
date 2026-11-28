@@ -342,6 +342,36 @@ describe('adoptPendingWrites', () => {
         expect(pendingWrites(dir, 'pdm{new}')).toEqual(['ok.txt']);
     });
 
+    test('notes the owner in a file only the user can read, mode 0600, in a folder mode 0700', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'pdm-cache-'));
+        adoptPendingWrites(dir, 'pdm{new}', OWNER);
+        expect(statSync(join(dir, 'proton-drive-mount')).mode & 0o777).toBe(0o700);
+        expect(statSync(join(dir, 'proton-drive-mount', 'pdm{new}')).mode & 0o777).toBe(0o600);
+    });
+
+    test('closes an owner file and folder that an earlier version left open to group and other', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'pdm-cache-'));
+        mkdirSync(join(dir, 'proton-drive-mount'), { mode: 0o755 });
+        writeFileSync(join(dir, 'proton-drive-mount', 'pdm{new}'), OWNER, { mode: 0o644 });
+        chmodSync(join(dir, 'proton-drive-mount'), 0o755);
+        chmodSync(join(dir, 'proton-drive-mount', 'pdm{new}'), 0o644);
+        adoptPendingWrites(dir, 'pdm{new}', OWNER);
+        expect(statSync(join(dir, 'proton-drive-mount')).mode & 0o777).toBe(0o700);
+        expect(statSync(join(dir, 'proton-drive-mount', 'pdm{new}')).mode & 0o777).toBe(0o600);
+    });
+
+    test('makes the folders it moves files into mode 0700, and a record it rewrites mode 0600', () => {
+        const dir = cacheWith({ 'Photos/torn.jpg': true }, 'pdm{old}');
+        writeFileSync(join(dir, 'vfsMeta', 'pdm{old}', 'Photos/torn.jpg'), '{"ModTi');
+        chmodSync(join(dir, 'vfsMeta', 'pdm{old}', 'Photos/torn.jpg'), 0o644);
+        expect(adoptPendingWrites(dir, 'pdm{new}', OWNER)).toEqual({ moved: ['Photos/torn.jpg'], kept: [] });
+        for (const kind of ['vfs', 'vfsMeta']) {
+            expect(statSync(join(dir, kind, 'pdm{new}')).mode & 0o777).toBe(0o700);
+            expect(statSync(join(dir, kind, 'pdm{new}', 'Photos')).mode & 0o777).toBe(0o700);
+        }
+        expect(statSync(join(dir, 'vfsMeta', 'pdm{new}', 'Photos/torn.jpg')).mode & 0o777).toBe(0o600);
+    });
+
     test('moves nothing from a cache folder with no earlier mount', () => {
         expect(adoptPendingWrites(join(tmpdir(), 'pdm-no-such-cache'), 'pdm{new}', OWNER)).toEqual({ moved: [], kept: [] });
     });

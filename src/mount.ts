@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { closeSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -188,7 +188,9 @@ function rewriteRecord(cacheDir: string, folder: string, file: string): void {
         Fingerprint: '',
         Dirty: true,
     };
-    writeFileSync(path.join(cacheDir, 'vfsMeta', folder, file), JSON.stringify(record));
+    const to = path.join(cacheDir, 'vfsMeta', folder, file);
+    writeFileSync(to, JSON.stringify(record), { mode: 0o600 });
+    chmodSync(to, 0o600);
 }
 
 /** The paths in the Drive of the files rclone holds in `folder` of `cacheDir` and has not yet uploaded. */
@@ -303,8 +305,12 @@ export function adoptPendingWrites(cacheDir: string, folder: string, owner: stri
     const moved: string[] = [];
     const kept: KeptWrite[] = [];
     try {
-        mkdirSync(path.join(cacheDir, OWNERS), { recursive: true });
-        writeFileSync(path.join(cacheDir, OWNERS, folder), owner);
+        // The owner names the state dir and the --root: only the user may read it, as for the state dir.
+        const owners = path.join(cacheDir, OWNERS);
+        mkdirSync(owners, { recursive: true, mode: 0o700 });
+        chmodSync(owners, 0o700);
+        writeFileSync(path.join(owners, folder), owner, { mode: 0o600 });
+        chmodSync(path.join(owners, folder), 0o600);
     } catch {
         // rclone says what is wrong with the cache dir when it starts.
         return { moved, kept };
@@ -323,7 +329,7 @@ export function adoptPendingWrites(cacheDir: string, folder: string, owner: stri
             try {
                 for (const kind of ['vfs', 'vfsMeta']) {
                     const to = path.join(cacheDir, kind, folder, file);
-                    mkdirSync(path.dirname(to), { recursive: true });
+                    mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
                     renameSync(path.join(cacheDir, kind, old, file), to);
                 }
                 if (!hasRecord(cacheDir, folder, file)) rewriteRecord(cacheDir, folder, file);

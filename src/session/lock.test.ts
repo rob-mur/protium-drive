@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readFile, rm } from 'node:fs/promises';
+import { readFile, rm, stat } from 'node:fs/promises';
 
 import { afterEach, describe, expect, test } from 'bun:test';
 
@@ -26,6 +26,7 @@ describe('acquireStateLock', () => {
         const stateDir = scratch();
         const release = await acquireStateLock(stateDir);
         expect(await readFile(`${stateDir}/lock.pid`, 'utf8')).toBe(`${process.pid}\n`);
+        expect((await stat(`${stateDir}/lock.pid`)).mode & 0o777).toBe(0o600);
         let error: unknown;
         try {
             await acquireStateLock(stateDir);
