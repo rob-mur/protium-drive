@@ -2,8 +2,19 @@ import type { Entry } from '../drive/entry';
 
 import { toHref } from './paths';
 
+/**
+ * Characters outside the XML 1.0 `Char` production: C0 controls other than tab, LF
+ * and CR, lone surrogates, and U+FFFE/U+FFFF. XML forbids them even as character
+ * references, so one in a name makes the whole PROPFIND body unparseable.
+ */
+const NOT_XML_CHAR = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|\p{Cs}/gu;
+
+/**
+ * Escapes `value` for an XML text node or attribute. Characters XML 1.0 forbids become
+ * U+FFFD; the exact name still reaches clients through the percent-encoded `href`.
+ */
 export function escapeXml(value: string): string {
-    return value.replace(/[<>&'"]/g, (c) => {
+    return value.replace(NOT_XML_CHAR, '\uFFFD').replace(/[<>&'"]/g, (c) => {
         switch (c) {
             case '<':
                 return '&lt;';
