@@ -66,3 +66,22 @@ describe('toEntry', () => {
         expect(isSkipped(toEntry(node({ type: NodeType.Album }) as NodeEntity))).toBeTrue();
     });
 });
+
+describe('toEntry media type', () => {
+    const file = { type: NodeType.File, activeRevision: { uid: 'r', claimedSize: 1 } };
+    const mediaTypeOf = (mediaType: unknown) => (toEntry(node({ ...file, mediaType })) as { mediaType?: string }).mediaType;
+
+    test('keeps a type/subtype, with or without parameters', () => {
+        expect(mediaTypeOf('text/plain')).toBe('text/plain');
+        expect(mediaTypeOf('image/svg+xml')).toBe('image/svg+xml');
+        expect(mediaTypeOf('text/plain; charset=utf-8')).toBe('text/plain; charset=utf-8');
+        expect(mediaTypeOf('text/plain;charset="utf-8"')).toBe('text/plain;charset="utf-8"');
+        expect(mediaTypeOf(undefined)).toBeUndefined();
+    });
+
+    test('a value that is not a media type becomes application/octet-stream', () => {
+        for (const bad of ['text/plain\r\nX-Injected: yes', 'text/plain\x01', 'text', 'text/', '/plain', 'text/plain; charset', 'te xt/plain', '', 'text/pläin', 'text/plain; a="b\nc"']) {
+            expect(mediaTypeOf(bad)).toBe('application/octet-stream');
+        }
+    });
+});

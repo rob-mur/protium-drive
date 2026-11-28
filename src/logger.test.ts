@@ -46,6 +46,12 @@ describe('createLogger', () => {
         logger.error('shown');
         expect(lines.join('')).toBe('error: shown\n');
     });
+
+    test('CR, LF and other control characters in a line are escaped, so a value cannot forge a second line', () => {
+        const lines = capture({});
+        createLogger().error("GET /x: Header has invalid value: 'text/plain\r\nerror: forged'", 'a\x01b\x7fc\nd', '\u2028');
+        expect(lines).toEqual(["error: GET /x: Header has invalid value: 'text/plain\\r\\nerror: forged' a\\x01b\\x7fc\\nd \\u2028\n"]);
+    });
 });
 
 describe('logLevel', () => {

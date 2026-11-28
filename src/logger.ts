@@ -23,13 +23,27 @@ export function logLevel(flag: string | undefined, env: NodeJS.ProcessEnv): LogL
     return `Bad ${source} ${JSON.stringify(value)}: give debug, info, warn or error.`;
 }
 
+const NAMED_ESCAPES: Record<string, string> = { '\r': '\\r', '\n': '\\n', '\t': '\\t' };
+
+/**
+ * Writes C0 and C1 control characters, DEL and the Unicode line and paragraph separators as escapes.
+ * Logged values can come from the Drive or a client, so a CR or LF in one must not start a forged
+ * log line.
+ */
+function escapeControls(line: string): string {
+    return line.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, (char) => {
+        const code = char.charCodeAt(0);
+        return NAMED_ESCAPES[char] ?? (code > 0xff ? `\\u${code.toString(16)}` : `\\x${code.toString(16).padStart(2, '0')}`);
+    });
+}
+
 /** Levels below `level` go nowhere; the rest go to stderr, so stdout stays for answers. */
 export function createLogger(level: LogLevel = 'info'): Logger {
     const threshold = LOG_LEVELS.indexOf(level);
     const write = (at: LogLevel) => (message: string, ...args: unknown[]) => {
         if (LOG_LEVELS.indexOf(at) < threshold) return;
         const rest = args.length ? ` ${args.map(String).join(' ')}` : '';
-        process.stderr.write(`${at}: ${message}${rest}\n`);
+        process.stderr.write(`${at}: ${escapeControls(`${message}${rest}`)}\n`);
     };
     return { debug: write('debug'), info: write('info'), warn: write('warn'), error: write('error') };
 }
