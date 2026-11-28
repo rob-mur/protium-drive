@@ -65,6 +65,18 @@ describe('toEntry', () => {
         expect(isSkipped(toEntry(node({ name: { ok: false, value: undefined, error: new Error('x') } }) as NodeEntity))).toBeTrue();
         expect(isSkipped(toEntry(node({ type: NodeType.Album }) as NodeEntity))).toBeTrue();
     });
+
+    test('a name no path can hold is skipped: ".", "..", a slash, a NUL, over 255 bytes', () => {
+        for (const name of ['.', '..', 'a/b', '/', 'a\0b', 'x'.repeat(256), 'é'.repeat(128)]) {
+            expect(toEntry(node({ name: { ok: true, value: name } }))).toEqual({ skipped: expect.stringContaining('name') });
+        }
+    });
+
+    test('a name of 255 bytes, and names that only start with a dot, are kept', () => {
+        for (const name of ['x'.repeat(255), 'é'.repeat(127), '.hidden', '...', '.. ']) {
+            expect(toEntry(node({ name: { ok: true, value: name } }))).toMatchObject({ name });
+        }
+    });
 });
 
 describe('toEntry media type', () => {
