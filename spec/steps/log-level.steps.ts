@@ -1,11 +1,13 @@
 // The steps about the log level: the option and the variable the user sets it with, what the help
 // says of them, and the lines the serve, the mount and the rclone it runs write to stderr; and the
 // warnings the serve writes when Proton's requirement headers ask for a newer build; and that a line
-// break in a value the serve logs cannot forge a second log line.
+// break in a value the serve logs cannot forge a second log line; and that the serve warns once of
+// each file it skips because no path can hold its name.
 import { Given, Then, When } from "@cucumber/cucumber";
 
 import { Control } from "../support/send/control.ts";
 import { claim, last, succeeded, sum } from "./claims.ts";
+import { UNREACHABLE_NAMES } from "./drive.steps.ts";
 import { type DriveWorld, LOG_LEVEL_FLAG, LOG_LEVEL_VARIABLE } from "./world.ts";
 
 /** The levels the user can give, lowest first. */
@@ -183,5 +185,32 @@ Then(
     const serve = this.serve!;
     const forgedLines = lines(serve.process.stderr).filter((line) => line.startsWith(forged));
     claim(forgedLines.length === 0, () => `the serve wrote ${forgedLines.length} line(s) that start "${forged}":\n${forgedLines.join("\n")}\n${this.whatHappened()}`);
+  },
+);
+
+Then(
+  /^the listing of "([^"]*)" shows only "([^"]*)", and the serve warned once of each of those files that it skipped it$/,
+  async function (this: DriveWorld, folder: string, shown: string) {
+    const names = succeeded(this, last(this, "list")).map((entry) => entry.Name);
+    claim(
+      names.length === 1 && names[0] === shown,
+      () => `the listing of "${folder}" showed ${JSON.stringify(names)}, not only "${shown}".\n${this.whatHappened()}`,
+    );
+    const serve = this.serve;
+    claim(serve, () => `the serve was never started.\n${this.whatHappened()}`);
+    const skips = Object.keys(UNREACHABLE_NAMES).map((label) => {
+      const uid = this.uids.get(`${folder}/unreachable name ${label}`);
+      claim(uid, () => `no file was arranged for the name ${label}.\n${this.whatHappened()}`);
+      return { label, text: `Skipping node ${uid}: ` };
+    });
+    const saying = (text: string) => ownLines(serve.process.stderr, "warn").filter((line) => line.includes(text));
+    await serve.process.waitFor(() => skips.every(({ text }) => saying(text).length > 0), LINES_MS);
+    for (const { label, text } of skips) {
+      const warnings = saying(text);
+      claim(
+        warnings.length === 1,
+        () => `the serve warned ${warnings.length} times, not once, that it skipped the file named ${label}:\n${warnings.join("\n")}\n${this.whatHappened()}`,
+      );
+    }
   },
 );

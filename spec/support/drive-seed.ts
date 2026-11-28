@@ -12,6 +12,8 @@ const SCOPE_ID = "volume-1";
 export interface SeedFile {
   content: Uint8Array;
   mediaType?: string;
+  /** The name the Drive gives the file, when it is not the last segment of its path: one no path can hold. */
+  name?: string;
   /** The SDK gives the name as one it cannot decrypt. */
   nameUndecryptable?: boolean;
   /** False: the SDK gives no clear-text size. */
@@ -107,7 +109,7 @@ export class DriveSeed {
       const node: NodeRecord = {
         uid,
         parentUid,
-        name: nameOf(path),
+        name: file.name ?? nameOf(path),
         type: "file",
         created: now,
         modified: now,
