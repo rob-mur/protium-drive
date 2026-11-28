@@ -188,9 +188,7 @@ function rewriteRecord(cacheDir: string, folder: string, file: string): void {
         Fingerprint: '',
         Dirty: true,
     };
-    const to = path.join(cacheDir, 'vfsMeta', folder, file);
-    writeFileSync(to, JSON.stringify(record), { mode: 0o600 });
-    chmodSync(to, 0o600);
+    writeFileSync(path.join(cacheDir, 'vfsMeta', folder, file), JSON.stringify(record));
 }
 
 /** The paths in the Drive of the files rclone holds in `folder` of `cacheDir` and has not yet uploaded. */

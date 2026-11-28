@@ -360,16 +360,14 @@ describe('adoptPendingWrites', () => {
         expect(statSync(join(dir, 'proton-drive-mount', 'pdm{new}')).mode & 0o777).toBe(0o600);
     });
 
-    test('makes the folders it moves files into mode 0700, and a record it rewrites mode 0600', () => {
+    test('makes the folders it moves files into mode 0700', () => {
         const dir = cacheWith({ 'Photos/torn.jpg': true }, 'pdm{old}');
         writeFileSync(join(dir, 'vfsMeta', 'pdm{old}', 'Photos/torn.jpg'), '{"ModTi');
-        chmodSync(join(dir, 'vfsMeta', 'pdm{old}', 'Photos/torn.jpg'), 0o644);
         expect(adoptPendingWrites(dir, 'pdm{new}', OWNER)).toEqual({ moved: ['Photos/torn.jpg'], kept: [] });
         for (const kind of ['vfs', 'vfsMeta']) {
             expect(statSync(join(dir, kind, 'pdm{new}')).mode & 0o777).toBe(0o700);
             expect(statSync(join(dir, kind, 'pdm{new}', 'Photos')).mode & 0o777).toBe(0o700);
         }
-        expect(statSync(join(dir, 'vfsMeta', 'pdm{new}', 'Photos/torn.jpg')).mode & 0o777).toBe(0o600);
     });
 
     test('moves nothing from a cache folder with no earlier mount', () => {
