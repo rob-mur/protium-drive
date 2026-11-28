@@ -373,6 +373,14 @@
       "id": "a-read-of-an-unlisted-file-during-a-walk-of-argon2-locked-files-starts-within-seconds",
       "path": "spec/features/walk-read.feature",
       "expected_status": "green"
+    },
+    {
+      "id": "a-line-break-in-a-logged-value-cannot-forge-a-log-line",
+      "path": "spec/features/log-level.feature",
+      "expected_status": "red",
+      "failing_step": [
+        "^the serve warned that the root folder \"([^\"]*)\" does not exist, each time on one line, and wrote no line that starts \"([^\"]*)\"$"
+      ]
     }
   ]
 }
