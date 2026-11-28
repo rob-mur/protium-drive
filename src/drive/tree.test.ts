@@ -196,6 +196,23 @@ describe('DriveTree unservable nodes', () => {
         expect(logger.warnings).toEqual([expect.stringContaining('odd')]);
     });
 
+    for (const [label, name] of [
+        ['.', '.'],
+        ['..', '..'],
+        ['a name with a slash', 'a/b'],
+        ['a name with a NUL', 'a\0b'],
+        ['a 300-byte name', 'x'.repeat(300)],
+    ]) {
+        test(`a sibling named ${label} is not listed, and the skip is logged once`, async () => {
+            const logger = recordingLogger();
+            const tree = new DriveTree(fakeSdk(fixtureWith(file('hostile', name, 'photos'))) as never, logger);
+            const photos = (await tree.stat(['Photos']))!;
+            expect((await tree.list(photos)).map((entry) => entry.name)).toEqual(['beach.jpg']);
+            expect((await tree.list(photos)).map((entry) => entry.name)).toEqual(['beach.jpg']);
+            expect(logger.warnings).toEqual([expect.stringContaining('hostile')]);
+        });
+    }
+
     test('a node that comes back missing is skipped without a warning', async () => {
         const logger = recordingLogger();
         const nodes = fixtureWith(file('ghost', 'ghost.jpg', 'photos'));

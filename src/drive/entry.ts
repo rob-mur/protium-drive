@@ -22,9 +22,30 @@ export type Entry = {
 
 export type Skipped = { skipped: string };
 
+/** Linux NAME_MAX: the most bytes one path segment can hold. */
+const NAME_MAX_BYTES = 255;
+
+/** Why no path can reach `name`, or undefined when one can. */
+function unservableName(name: string): string | undefined {
+    if (name === '.' || name === '..') {
+        return `name ${name} is a path segment`;
+    }
+    if (name.includes('/')) {
+        return 'name has a slash';
+    }
+    if (name.includes('\0')) {
+        return 'name has a NUL';
+    }
+    if (Buffer.byteLength(name, 'utf8') > NAME_MAX_BYTES) {
+        return `name is over ${NAME_MAX_BYTES} bytes`;
+    }
+    return undefined;
+}
+
 /**
  * Converts an SDK node. Returns `{ skipped }` for nodes the server must not
- * show: trashed nodes, names the SDK cannot decrypt, albums, and files with no
+ * show: trashed nodes, names the SDK cannot decrypt, names no path can reach
+ * (`.`, `..`, a slash, a NUL, over 255 bytes), albums, and files with no
  * clear-text size (a size of 0 would make rclone copy them as empty files).
  */
 export function toEntry(node: NodeEntity): Entry | Skipped {
@@ -33,6 +54,10 @@ export function toEntry(node: NodeEntity): Entry | Skipped {
     }
     if (!node.name.ok) {
         return { skipped: 'name cannot be decrypted' };
+    }
+    const unservable = unservableName(node.name.value);
+    if (unservable) {
+        return { skipped: unservable };
     }
     const base = {
         uid: node.uid,
