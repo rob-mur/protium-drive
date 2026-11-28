@@ -17,10 +17,16 @@ import type { DriveTree } from '../drive/tree';
 import { servingRequest } from '../proton/crypto-pool';
 import { FailedPutGuard } from './guard';
 import { parsePath } from './paths';
-import { etagFor, multistatus } from './xml';
+import { etagFor, multistatusStream } from './xml';
 
 /** The methods this serve answers; the other capabilities grow this as they land. */
 const ALLOW = 'OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL, MOVE';
+
+/**
+ * A Depth: 1 listing with more children than this is large: only one large
+ * listing of the same folder streams at a time, and the others wait (#183).
+ */
+export const LARGE_LISTING = 1_000;
 
 /** The `Retry-After` for a Drive that cannot be reached. */
 const UNREACHABLE_RETRY_SECONDS = 10;
@@ -45,6 +51,8 @@ export function createWebDavHandler(options: HandlerOptions): WebDavHandler {
     const { tree, logger } = options;
     const authProblem = options.authProblem ?? (() => undefined);
     const guard = options.guard ?? new FailedPutGuard();
+    /** Per folder UID, the end of the last large listing of it that has started or waits. */
+    const largeListings = new Map<string, Promise<void>>();
 
     return async (request) => {
         const started = performance.now();
@@ -99,7 +107,10 @@ export function createWebDavHandler(options: HandlerOptions): WebDavHandler {
         }
         const entry = segments.length === 0 ? await tree.root() : await requireEntry(segments);
         const children = depth === '1' && entry.kind === 'folder' ? await tree.list(entry) : [];
-        return new Response(multistatus(segments, entry, children), {
+        const turn = children.length > LARGE_LISTING ? largeListingTurn(entry.uid) : undefined;
+        // A client that leaves before its body is read may never pull or cancel it.
+        if (turn) request.signal.addEventListener('abort', turn.end, { once: true });
+        return new Response(multistatusStream(segments, entry, children, { before: turn?.start, onEnd: turn?.end }), {
             status: 207,
             headers: { 'Content-Type': 'application/xml; charset=utf-8' },
         });
@@ -217,6 +228,24 @@ export function createWebDavHandler(options: HandlerOptions): WebDavHandler {
         const overwrite = (request.headers.get('Overwrite') ?? 'T').toUpperCase() !== 'F';
         const { entry, created } = await tree.move(segments, parsePath(destinationUrl.pathname), overwrite);
         return new Response(null, { status: created ? 201 : 204 });
+    }
+
+    /**
+     * A place in the queue of large listings of one folder. `start` resolves
+     * once the listings ahead have ended; `end` lets the next one start.
+     */
+    function largeListingTurn(folderUid: string): { start: () => Promise<void>; end: () => void } {
+        const ahead = largeListings.get(folderUid) ?? Promise.resolve();
+        let end!: () => void;
+        const ended = new Promise<void>((resolve) => (end = resolve));
+        const last = ahead.then(() => ended);
+        largeListings.set(folderUid, last);
+        void last.then(() => {
+            if (largeListings.get(folderUid) === last) {
+                largeListings.delete(folderUid);
+            }
+        });
+        return { start: () => ahead, end };
     }
 
     async function requireEntry(segments: string[]): Promise<NonNullable<Awaited<ReturnType<typeof tree.stat>>>> {

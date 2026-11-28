@@ -3,7 +3,7 @@ import fc from 'fast-check';
 import { SaxesParser } from 'saxes';
 
 import type { Entry } from '../drive/entry.ts';
-import { etagFor, escapeXml, multistatus } from './xml.ts';
+import { etagFor, escapeXml, multistatusStream } from './xml.ts';
 
 function entry(overrides: Partial<Entry> = {}): Entry {
     return {
@@ -31,12 +31,14 @@ describe('etagFor', () => {
     });
 });
 
-describe('multistatus', () => {
-    test('the target comes first, then one response per child', () => {
-        const body = multistatus(['Docs'], entry(), [
-            entry({ uid: 'uid-2', name: 'note.txt', kind: 'file', size: 3, parentUid: 'uid-1' }),
-            entry({ uid: 'uid-3', name: 'Photos', parentUid: 'uid-1' }),
-        ]);
+describe('multistatusStream', () => {
+    test('the target comes first, then one response per child', async () => {
+        const body = await new Response(
+            multistatusStream(['Docs'], entry(), [
+                entry({ uid: 'uid-2', name: 'note.txt', kind: 'file', size: 3, parentUid: 'uid-1' }),
+                entry({ uid: 'uid-3', name: 'Photos', parentUid: 'uid-1' }),
+            ]),
+        ).text();
         expect(body).toStartWith('<?xml version="1.0" encoding="utf-8"?>');
         expect(body).toContain('<D:multistatus xmlns:D="DAV:">');
         expect(body).toContain('<D:href>/Docs/</D:href>');
@@ -44,6 +46,17 @@ describe('multistatus', () => {
         expect(body.indexOf('/Docs/')).toBeLessThan(body.indexOf('/Docs/note.txt'));
         expect(body).toContain('<D:getcontentlength>3</D:getcontentlength>');
         expect(body).toContain('<D:resourcetype><D:collection/></D:resourcetype>');
+    });
+
+    test('onEnd runs once whether the body is read to its end or cancelled', async () => {
+        let ends = 0;
+        await new Response(multistatusStream([], entry(), [], { onEnd: () => ends++ })).text();
+        expect(ends).toBe(1);
+
+        const reader = multistatusStream([], entry(), [entry()], { onEnd: () => ends++ }).getReader();
+        await reader.read();
+        await reader.cancel();
+        expect(ends).toBe(2);
     });
 });
 

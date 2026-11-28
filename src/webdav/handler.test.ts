@@ -16,7 +16,7 @@ import {
 import { Backoff } from '../drive/backoff.ts';
 import { DriveError } from '../drive/errors.ts';
 import { DriveTree } from '../drive/tree.ts';
-import { createWebDavHandler, parseRange } from './handler.ts';
+import { createWebDavHandler, LARGE_LISTING, parseRange } from './handler.ts';
 import { FailedPutGuard } from './guard.ts';
 import { type Entry, toEntry } from '../drive/entry.ts';
 import type { ByteRange } from '../drive/download.ts';
@@ -165,6 +165,92 @@ describe('createWebDavHandler', () => {
         const response = await handle(new Request('http://127.0.0.1/', { method: 'PROPFIND', headers: { Depth: '0' } }));
         expect(response.status).toBe(502);
         expect(warns.some((line) => line.includes('Proton broke'))).toBeTrue();
+    });
+});
+
+/** A tree whose folders `big` and `other` each hold `count` files. */
+function treeWithLargeFolders(count: number): DriveTree {
+    const folder = (name: string): Entry => ({ ...ROOT, uid: `uid-${name}`, name });
+    const children = Array.from({ length: count }, (_, i) => fileEntry(`f${i}.txt`, i));
+    return {
+        root: async () => ROOT,
+        list: async () => children,
+        stat: async (segments: string[]) => (segments.length === 0 ? ROOT : folder(segments[0])),
+    } as unknown as DriveTree;
+}
+
+const listRequest = (path: string) => new Request(`http://127.0.0.1/${path}/`, { method: 'PROPFIND', headers: { Depth: '1' } });
+
+/** Whether `promise` settles before the tasks queued now have run. */
+async function settlesSoon(promise: Promise<unknown>): Promise<boolean> {
+    let settled = false;
+    void promise.then(() => (settled = true), () => (settled = true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return settled;
+}
+
+describe('PROPFIND of a large folder (#183)', () => {
+    test('streams the listing in many chunks, not as one body', async () => {
+        const handle = serve(treeWithLargeFolders(LARGE_LISTING * 2));
+        const response = await handle(listRequest('big'));
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let chunks = 0;
+        let body = '';
+        for (let read = await reader.read(); !read.done; read = await reader.read()) {
+            chunks++;
+            body += decoder.decode(read.value, { stream: true });
+        }
+        expect(response.status).toBe(207);
+        expect(chunks).toBeGreaterThan(4);
+        expect(body.split('<D:response>').length - 1).toBe(LARGE_LISTING * 2 + 1);
+        expect(body).toStartWith('<?xml version="1.0" encoding="utf-8"?>\n<D:multistatus xmlns:D="DAV:"><D:response><D:href>/big/</D:href>');
+        expect(body).toEndWith('</D:response></D:multistatus>\n');
+    });
+
+    test('a second large listing of the same folder waits until the first is read to its end', async () => {
+        const handle = serve(treeWithLargeFolders(LARGE_LISTING + 1));
+        const first = await handle(listRequest('big'));
+        const second = await handle(listRequest('big'));
+        const firstReader = first.body!.getReader();
+        await firstReader.read();
+
+        const secondText = second.text();
+        expect(await settlesSoon(secondText)).toBe(false);
+
+        while (!(await firstReader.read()).done) {}
+        expect((await secondText).split('<D:response>').length - 1).toBe(LARGE_LISTING + 2);
+    });
+
+    test('a cancelled large listing lets the next one of that folder go', async () => {
+        const handle = serve(treeWithLargeFolders(LARGE_LISTING + 1));
+        const first = await handle(listRequest('big'));
+        const second = await handle(listRequest('big'));
+        const firstReader = first.body!.getReader();
+        await firstReader.read();
+        await firstReader.cancel();
+        expect(await settlesSoon(second.text())).toBe(true);
+    });
+
+    test('a large listing whose client left before reading it lets the next one go', async () => {
+        const handle = serve(treeWithLargeFolders(LARGE_LISTING + 1));
+        const left = new AbortController();
+        await handle(new Request('http://127.0.0.1/big/', { method: 'PROPFIND', headers: { Depth: '1' }, signal: left.signal }));
+        const second = await handle(listRequest('big'));
+        left.abort();
+        expect(await settlesSoon(second.text())).toBe(true);
+    });
+
+    test('large listings of different folders, and small listings, do not wait', async () => {
+        const handle = serve(treeWithLargeFolders(LARGE_LISTING + 1));
+        const first = await handle(listRequest('big'));
+        await first.body!.getReader().read();
+        expect(await settlesSoon((await handle(listRequest('other'))).text())).toBe(true);
+
+        const small = serve(treeWithLargeFolders(LARGE_LISTING));
+        const held = await small(listRequest('big'));
+        await held.body!.getReader().read();
+        expect(await settlesSoon((await small(listRequest('big'))).text())).toBe(true);
     });
 });
 

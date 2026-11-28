@@ -66,11 +66,65 @@ function propResponse(segments: string[], entry: Entry): string {
     ].join('');
 }
 
-/** Builds a PROPFIND multistatus body: the target first, then its children. */
-export function multistatus(segments: string[], target: Entry, children: Entry[]): string {
-    const responses = [propResponse(segments, target)];
-    for (const child of children) {
-        responses.push(propResponse([...segments, child.name], child));
-    }
-    return `<?xml version="1.0" encoding="utf-8"?>\n<D:multistatus xmlns:D="DAV:">${responses.join('\n')}</D:multistatus>\n`;
+/** Children rendered into each chunk of a streamed multistatus body: about 128 KB. */
+const ENTRIES_PER_CHUNK = 256;
+
+const encoder = new TextEncoder();
+
+/**
+ * Streams a PROPFIND multistatus body: the target first, then its children,
+ * ENTRIES_PER_CHUNK of them at a time as the reader asks, so a large folder's
+ * XML never sits in memory whole (#183). `onEnd` runs once, when the body is
+ * read to its end, fails or is cancelled. `before` runs ahead of the first chunk.
+ */
+export function multistatusStream(
+    segments: string[],
+    target: Entry,
+    children: readonly Entry[],
+    hooks: { before?: () => Promise<void>; onEnd?: () => void } = {},
+): ReadableStream<Uint8Array> {
+    let next = -1;
+    let ended = false;
+    const end = () => {
+        if (!ended) {
+            ended = true;
+            hooks.onEnd?.();
+        }
+    };
+    return new ReadableStream<Uint8Array>(
+        {
+            async pull(controller) {
+                try {
+                    if (next < 0) {
+                        await hooks.before?.();
+                        next = 0;
+                        controller.enqueue(
+                            encoder.encode(
+                                `<?xml version="1.0" encoding="utf-8"?>\n<D:multistatus xmlns:D="DAV:">${propResponse(segments, target)}`,
+                            ),
+                        );
+                        return;
+                    }
+                    if (next >= children.length) {
+                        controller.enqueue(encoder.encode('</D:multistatus>\n'));
+                        controller.close();
+                        end();
+                        return;
+                    }
+                    let chunk = '';
+                    const stop = Math.min(next + ENTRIES_PER_CHUNK, children.length);
+                    for (; next < stop; next++) {
+                        const child = children[next];
+                        chunk += `\n${propResponse([...segments, child.name], child)}`;
+                    }
+                    controller.enqueue(encoder.encode(chunk));
+                } catch (error: unknown) {
+                    end();
+                    throw error;
+                }
+            },
+            cancel: end,
+        },
+        { highWaterMark: 0 },
+    );
 }

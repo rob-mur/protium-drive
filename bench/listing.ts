@@ -5,7 +5,7 @@ import { isSkipped, toEntry } from '../src/drive/entry';
 import type { DriveSdk } from '../src/drive/sdk';
 import { DriveTree } from '../src/drive/tree';
 import { initCryptoWorker } from '../src/proton/crypto-pool';
-import { multistatus } from '../src/webdav/xml';
+import { multistatusStream } from '../src/webdav/xml';
 
 import { importNodeKey } from './crypto';
 import { makeNodeKeys, type NodeKey } from './keys';
@@ -139,7 +139,7 @@ export async function listOnce(drive: ReturnType<typeof buildDrive>, options: Li
 
     const cold = await timed(() => tree.list(folder));
     const cached = await timed(() => tree.list(folder));
-    const xml = await timed(async () => multistatus(['Photos'], folder, cold.value));
+    const xml = await timed(() => new Response(multistatusStream(['Photos'], folder, cold.value)).text());
     const toEntryTime = await timed(async () => [...drive.nodes.values()].map((node) => isSkipped(toEntry(node))));
     return { clock, cold, cached, xml, toEntryMs: toEntryTime.ms, totalMs: cold.ms + xml.ms };
 }
